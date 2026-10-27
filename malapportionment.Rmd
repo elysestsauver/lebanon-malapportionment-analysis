@@ -1,0 +1,1643 @@
+---
+title: "Lebanon: malapportionment and seat-allocation counterfactuals"
+author: "Elyse St Sauver, Peyton Howard"
+date: "2026-09-10"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+
+options(knitr.kable.NA = "")
+
+# One helper so every table in the document looks the same.
+ktab <- function(x, caption, col.names = NA, digits = 2, ...) {
+  kbl(x, caption = caption, col.names = col.names, digits = digits,
+      row.names = FALSE, format.args = list(big.mark = ","), ...) |>
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                  full_width = FALSE, position = "left")
+}
+
+# LaTeX twin of ktab, for the results section. It PRINTS the table source so a subsection
+# can be run on its own and the result pasted straight into a LaTeX document; nothing is
+# written to disk and no other chunk has to be run first.
+#
+# Your preamble needs: booktabs, array (bold columns), graphicx (rotated headers and
+# \resizebox), and lscape or pdflscape (the wide tables). Captions carry a \label rather
+# than a hard-coded number, so LaTeX numbers them by position in your document.
+#
+#   fit       upright, but squeezed to \linewidth: tight padding and \resizebox. For the
+#             two 16-column tables, which cannot fit a portrait page at full size.
+#   wide      as `fit`, and additionally turned sideways with rotated headers. Bigger
+#             type, at the cost of a landscape page - set wide = TRUE if you prefer that.
+#   bold_row  / bold_col   emphasise a summary row / column
+#   bold_cells  logical matrix over the body columns 2..ncol(x), bolding individual
+#               entries. Used to mark which cells actually hold a seat.
+#   pack      named vector of group sizes, printed as subheadings instead of a label column
+#   header    named vector of column-group widths, printed as a spanning row above the column
+#             names, so a family of columns is labelled once. Must sum to ncol(x). Not
+#             compatible with `wide`, which rotates the same row.
+#   note      text set under the table as "Note: ...". LaTeX is passed through, so \ref works.
+#             Needs threeparttable in the preamble.
+ltab <- function(x, caption, label, col.names = NA, digits = 2, fit = FALSE,
+                 wide = FALSE, align = NULL, bold_row = NULL, bold_col = NULL,
+                 bold_cells = NULL, pack = NULL, header = NULL, note = NULL) {
+  if (is.null(align)) align <- paste0("l", strrep("r", ncol(x) - 1))
+  squeeze <- fit || wide
+  out <- kbl(x, format = "latex", booktabs = TRUE, linesep = "", escape = TRUE,
+             caption = caption, label = label, col.names = col.names, digits = digits,
+             row.names = FALSE, align = align,
+             format.args = list(big.mark = ",")) |>
+    kable_styling(latex_options = c("hold_position", if (squeeze) "scale_down"))
+  if (!is.null(bold_cells)) {
+    # column_spec takes a logical vector down the column, so apply it column by column.
+    stopifnot(nrow(bold_cells) == nrow(x), ncol(bold_cells) == ncol(x) - 1L)
+    for (j in seq_len(ncol(bold_cells)))
+      out <- column_spec(out, j + 1L, bold = bold_cells[, j])
+  }
+  # `header` is a spanning row above the column names, as a named vector of group widths -
+  # e.g. c(" " = 3, "Gallagher" = 3, "Loosemore-Hanby" = 2) - so a family of columns can be
+  # labelled once instead of repeating the name in every heading. It must total ncol(x).
+  # Applied before the row_spec calls below, since row 0 would otherwise be ambiguous: do not
+  # combine `header` with `wide`, which rotates row 0.
+  if (!is.null(header)) {
+    stopifnot(sum(header) == ncol(x), is.null(wide) || !wide)
+    out <- add_header_above(out, header)
+  }
+  if (!is.null(bold_row)) out <- row_spec(out, bold_row, bold = TRUE)
+  if (!is.null(bold_col)) out <- column_spec(out, bold_col, bold = TRUE)
+  if (!is.null(pack))     out <- pack_rows(out, index = pack)
+  if (wide) out <- row_spec(out, 0, angle = 45)
+  if (!is.null(note))
+    out <- footnote(out, general = note, general_title = "Note:", footnote_as_chunk = TRUE,
+                    threeparttable = TRUE, escape = FALSE)
+  if (squeeze) {
+    # After the FIRST \centering - not after \begin{table}, which would land between it
+    # and its [!h] placement option and leave "[!h]" to be typeset as text.
+    out <- sub("\\centering", "\\centering\n\\setlength{\\tabcolsep}{3pt}",
+               out, fixed = TRUE)
+  }
+  if (wide) out <- landscape(out)
+  cat(out, "\n")
+  invisible(out)
+}
+```
+
+# 1. What this computes
+The Malapportionment Indices
+
+Lebanon apportions 128 parliamentary seats on two dimensions at once. Seats are assigned
+to 15 electoral districts, and within each district to specific confessions - the seat is
+not "a seat for Bcharre", it is "the Maronite seat for Bcharre". So there are three
+questions to ask, not one:
+
+1. **Geographic.** Do the 15 districts hold seats in proportion to their voters?
+2. **Confessional.** Do the confessions hold seats in proportion to their voters?
+3. **District x faith.** Does each confession hold seats in each district in proportion to
+   its voters there?
+
+Two indices are reported throughout. The first is Samuels and Snyder's index of
+malapportionment scaled by the number of seats n, abbreviated SLH in the text and named in full in table headings where
+there is room for it:
+
+$$\text{SLH} = \frac{n}{2}\sum_i \left| s_i - v_i \right|$$
+
+where $s_i$ is unit $i$'s share of seats and $v_i$ its share of registered voters, both in
+percent. SLH is 0 under exact proportionality. It reads as the percentage of seats that
+would have to change hands to reach proportionality, so multiplying by n turns it into a
+count of seats.
+
+The second is the **Gallagher least-squares index**, which squares the deviations rather
+than taking absolute values:
+
+$$\text{Gallagher} = \sqrt{\tfrac{1}{2}\sum_i \left( s_i - v_i \right)^2}$$
+
+The two answer different questions. SLH asks *how many seats are in the wrong place*, which
+is the natural way to describe a status quo. Gallagher asks *how badly are they in the wrong
+place*, because a squared term punishes one unit being far off more than several being
+slightly off. That difference is irrelevant when describing a single seat table but decisive
+when ranking reforms - so the descriptive tables lead with SLH, while the seat-table
+optimisation in 5.5 is scored on Gallagher.
+
+The three levels are nested: the geographic and confessional units are both aggregations of
+the district x faith cell. **For SLH**, aggregating lets positive and negative deviations
+cancel, so the cell index can never be smaller than either of the other two. The interesting
+quantity is the gap - a confession can hold exactly its national share of seats and still
+hold them in the wrong districts, and only the cell index sees that.
+
+That cross-share comparability does not hold for Gallagher, and Table 1 shows it failing. Confessional
+Gallagher (10.63) is nearly double the cell figure (5.36), the opposite of the SLH ordering.
+Squaring is the reason: one confession short by 8.6 points nationally contributes 8.6² = 74
+to the sum, but the same shortfall spread over fifteen districts as roughly 0.6 points each
+contributes only about 5. Absolute values do not care how a deviation is distributed;
+squares punish concentration heavily. So a Gallagher figure is only ever comparable with
+another Gallagher figure computed over the *same* units - never across levels.
+
+**On the denominator.** These are registration counts, not residents and not votes cast.
+Lebanese register in their ancestral village rather than where they live, and there has
+been no census since 1932, so no population denominator exists to check them against.
+What is measured here is apportionment relative to the electoral roll - which is the thing
+the law itself operates on.
+
+# 2. Data
+
+`seats.csv` is the statutory allocation, one row per qada with a column per confession.
+It is grouped up to the 15 electoral districts here. The allocation is identical in 2018,
+2022 and 2026, so it is not year-specific - the 2022 rows are used because that is the
+year the voter roll covers.
+
+`voters_by_district_sect_long.csv` is the 2022 register (3,967,507 registrants) at minor
+district x sect, extracted from the Ministry of Interior's final release. It is aggregated
+up to the same 15 districts. The file omits combinations with no registrants rather than
+storing a zero, so the grid is completed explicitly.
+
+```{r data}
+FAITH <- c(sunni             = "Sunni",
+           shia              = "Shia",
+           druze             = "Druze",
+           alawite           = "Alawite",
+           maronite          = "Maronite",
+           greek_catholic    = "Greek Catholic",
+           greek_orthodox    = "Greek Orthodox",
+           evangelical       = "Protestant",            # voter file's label
+           armenian_catholic = "Armenian Catholic",
+           armenian_orthodox = "Armenian Orthodox",
+           minorities        = "Christian Minorities")  # voter file's label
+
+# voter-file district name -> the slug used in seats.csv
+DISTRICT <- c("Beirut I"          = "beirut_1", "Beirut II"        = "beirut_2",
+              "Bekaa I"           = "bekaa_1",  "Bekaa II"         = "bekaa_2",
+              "Bekaa III"         = "bekaa_3",
+              "Mount Lebanon I"   = "mt_leb_1", "Mount Lebanon II" = "mt_leb_2",
+              "Mount Lebanon III" = "mt_leb_3", "Mount Lebanon IV" = "mt_leb_4",
+              "North I"           = "n_leb_1",  "North II"         = "n_leb_2",
+              "North III"         = "n_leb_3",
+              "South I"           = "s_leb_1",  "South II"         = "s_leb_2",
+              "South III"         = "s_leb_3")
+
+# Slug -> printable district name, and a short form for table headers. The full names run
+# to "Mount Lebanon III", far too wide for a 16-column table; abbreviating them is what
+# lets those tables be set upright rather than sideways.
+DNAME <- setNames(names(DISTRICT), unname(DISTRICT))
+DABBR <- setNames(names(DISTRICT) |>
+                    str_replace("^Beirut ", "Bei ") |>
+                    str_replace("^Bekaa ", "Bek ") |>
+                    str_replace("^Mount Lebanon ", "ML ") |>
+                    str_replace("^North ", "N ") |>
+                    str_replace("^South ", "S "),
+                  unname(DISTRICT))
+
+# Seats: one row per district x faith. seats.csv carries a qada total in a column already
+# called `seats`, so only the per-confession columns are taken forward.
+seats_dc <- read.csv("seats.csv") |>
+  filter(year == 2022) |>
+  select(district, all_of(names(FAITH))) |>
+  pivot_longer(-district, names_to = "faith", values_to = "seats") |>
+  mutate(faith = unname(FAITH[faith])) |>
+  summarise(seats = sum(seats), .by = c(district, faith))
+
+# Voters: same grain. `Other` has registrants but holds no seat of any kind, so it stays
+# in with seats = 0 rather than being dropped from the denominator.
+vot_dc <- read.csv("data/population - registered voters/voters_by_district_sect_long.csv",
+                   fileEncoding = "UTF-8-BOM") |>
+  mutate(district = unname(DISTRICT[major_district]), faith = sect_en) |>
+  summarise(voters = sum(registered_total), residents = sum(registered_resident),
+            .by = c(district, faith))
+
+# The full 15 x 12 grid. The voter file stores no row for a district-faith pair with no
+# registrants, and seats_dc carries no row for `Other`, so both sides are filled with 0.
+dc <- expand_grid(district = unname(DISTRICT), faith = sort(unique(vot_dc$faith))) |>
+  left_join(seats_dc, by = c("district", "faith")) |>
+  left_join(vot_dc,   by = c("district", "faith")) |>
+  mutate(across(c(seats, voters, residents), \(x) replace_na(x, 0))) |>
+  mutate(dist_name = names(DISTRICT)[match(district, DISTRICT)], .after = district)
+
+# Nothing was lost or invented in the reshaping.
+stopifnot(
+  nrow(dc) == 15 * 12,
+  sum(dc$seats)  == 128,
+  sum(dc$voters) == sum(read.csv(
+    "data/population - registered voters/voters_by_district_sect_long.csv",
+    fileEncoding = "UTF-8-BOM")$registered_total),
+  !any(is.na(dc)))
+
+cat(sprintf("%d district x faith cells | %d seats | %s registrants | %d cells hold a seat\n",
+            nrow(dc), sum(dc$seats), format(sum(dc$voters), big.mark = ","),
+            sum(dc$seats > 0)))
+```
+
+# 3. Computing the index
+
+```{r index}
+# SLH over a set of units. `s` and `v` are counts, not shares; they are normalized here so
+# that a unit absent from one side simply contributes its full share on the other.
+mal <- function(s, v) sum(abs(100 * s / sum(s) - 100 * v / sum(v))) / 2
+
+# Collapse the cell table to a level and score it. `by` is the grouping - no grouping at
+# all (`NULL`) would be a single unit and a score of 0, so every call names at least one.
+score <- function(data, by, voters = voters) {
+  g <- summarise(data, s = sum(seats), v = sum({{ voters }}), .by = all_of(by))
+  mal(g$s, g$v)
+}
+
+# Gallagher's least-squares index, over the same units. It squares the deviations instead
+# of taking absolute values, so unlike SLH it registers HOW far a unit is from its share,
+# not just that it is off. That distinction decides which index can rank a reform: see
+# the note under Table 1.
+gallagher <- function(s, v) sqrt(sum((100 * s / sum(s) - 100 * v / sum(v))^2) / 2)
+score_g <- function(data, by, voters = voters) {
+  g <- summarise(data, s = sum(seats), v = sum({{ voters }}), .by = all_of(by))
+  gallagher(g$s, g$v)
+}
+
+# --- the same cells as a plain vector ------------------------------------------
+# `dc` from section 2 is already the full district x confession grid, so fixing its row
+# order turns any seat table into a vector of 180 counts. Section 5 perturbs that vector
+# and scores it with `indices()` below, so both live here rather than in whichever section happened to need them first.
+cells    <- dc |> arrange(district, faith)
+key180   <- paste(cells$district, cells$faith, sep = "|")
+faiths12 <- sort(unique(cells$faith))
+S0 <- cells$seats
+V0 <- cells$voters
+
+dmap <- match(cells$district, unname(DISTRICT))
+fmap <- match(cells$faith, faiths12)
+agg  <- function(x, m, k) as.vector(tapply(x, factor(m, levels = seq_len(k)), sum,
+                                           default = 0))
+vp  <- 100 * V0 / sum(V0)
+vpd <- 100 * agg(V0, dmap, 15) / sum(V0)
+vpf <- 100 * agg(V0, fmap, 12) / sum(V0)
+
+# Both indices at all three levels, for any seat vector.
+indices <- function(S) {
+  Sd <- agg(S, dmap, 15); Sf <- agg(S, fmap, 12); T <- sum(S)
+  c(mal_geo  = sum(abs(100*Sd/T - vpd))/2,
+    mal_conf = sum(abs(100*Sf/T - vpf))/2,
+    mal_cell = sum(abs(100*S /T - vp ))/2,
+    gal_cell = sqrt(sum((100*S /T - vp )^2)/2),
+    gal_geo  = sqrt(sum((100*Sd/T - vpd)^2)/2),
+    gal_conf = sqrt(sum((100*Sf/T - vpf)^2)/2))
+}
+base_ix <- indices(S0)
+
+# The vector route and the data-frame route must agree.
+stopifnot(sum(S0) == 128,
+          all.equal(unname(base_ix[1:3]),
+                    c(score(dc, "district"), score(dc, "faith"),
+                      score(dc, c("district", "faith"))), tolerance = 1e-8))
+```
+
+# 4. Computing SLH and Gallagher Scores
+
+```{r scores}
+levels_ <- list(Geographic          = "district",
+                Confessional        = "faith",
+                `District x faith`  = c("district", "faith"))
+
+scores <- tibble(
+  level = names(levels_),
+  unit  = c("15 electoral districts", "12 confessions", "15 x 12 cells"),
+  n     = c(15, 12, 180),
+  mal   = map_dbl(levels_, \(b) score(dc, b)),
+  mal_r = map_dbl(levels_, \(b) score(dc, b, residents)),
+  gal   = map_dbl(levels_, \(b) score_g(dc, b))) |>
+  mutate(seats = mal / 100 * 128)
+
+# Aggregation can only let deviations cancel, so the cell index bounds the other two.
+# This is asserted for SLH only: Gallagher is NOT monotone under refinement, and in fact
+# runs the other way here - see the note above Table 1.
+stopifnot(scores$mal[1] <= scores$mal[3] + 1e-9,
+          scores$mal[2] <= scores$mal[3] + 1e-9,
+          scores$gal[2] >  scores$gal[3])          # the non-monotonicity, pinned down
+
+ktab(scores |> relocate(seats, .after = gal),
+     caption = "Table 1. Malapportionment of the 128 seats, 2022 register.",
+     col.names = c("Level", "Unit", "Units", "SLH", "SLH, residents only",
+                   "Gallagher", "Seats misallocated"),
+     digits = c(0, 0, 0, 2, 2, 3, 1))
+```
+
+The two one-dimensional indices are each substantially smaller than the joint one. The gap
+between the confessional index and the cell index is the "right total, wrong place"
+problem: it is the misallocation that survives even after every confession has been given
+its correct national number of seats.
+
+Because Gallagher squares, it is dominated by the worst-placed units rather than spread
+evenly over all of them, so the index is best read alongside its largest contributors.
+
+```{r gal-contrib}
+contributors <- function(by, label) {
+  g  <- summarise(dc, s = sum(seats), v = sum(voters), .by = all_of(by))
+  d  <- 100 * g$s / sum(g$s) - 100 * g$v / sum(g$v)
+  tibble(level = label, unit = apply(g[by], 1, paste, collapse = " / "),
+         deviation = d, squared = d^2) |>
+    mutate(share = 100 * squared / sum(squared)) |> slice_max(squared, n = 3)
+}
+
+ktab(bind_rows(contributors("faith", "Confessional"),
+               contributors("district", "Geographic")),
+     caption = paste0("Table 2. The three largest contributors to each Gallagher index. ",
+                      "Deviation is seat share minus voter share, in percentage points."),
+     col.names = c("Level", "Unit", "Deviation (pp)", "Squared", "% of the index"),
+     digits = c(0, 0, 2, 1, 1))
+```
+
+Three confessions - Sunni, Shia and Maronite - account for 88% of the confessional index
+between them. The geographic index is less concentrated: its top three units make up 63%.
+
+## 4.1. Geographic
+
+`entitled` is the seat count a district would hold under exact proportionality, and
+`surplus` is what it actually holds minus that. Voters per seat is the same fact read
+directly: the national figure is 3,967,507 / 128, and a district below it is
+over-represented, because each of its voters counts for more in returning a member.
+
+```{r geographic}
+geo <- dc |>
+  summarise(voters = sum(voters), seats = sum(seats), .by = c(district, dist_name)) |>
+  mutate(voter_pct = 100 * voters / sum(voters),
+         seat_pct  = 100 * seats  / sum(seats),
+         per_seat  = voters / seats,
+         entitled  = 128 * voters / sum(voters),
+         surplus   = seats - entitled,
+         advantage = seat_pct / voter_pct) |>
+  arrange(per_seat)
+
+ktab(select(geo, dist_name, district, voters, seats, per_seat, voter_pct, seat_pct,
+            entitled, surplus, advantage),
+     caption = paste0("Table 3. Geographic apportionment, most to least over-represented. ",
+                      "SLH = ", sprintf("%.2f", score(dc, "district")), "."),
+     col.names = c("District", "Slug", "Registered", "Seats", "Voters/seat", "Voter %",
+                   "Seat %", "Entitled", "Surplus", "Advantage"),
+     digits = c(0, 0, 0, 0, 0, 2, 2, 1, 1, 2))
+
+cat(sprintf("National: %s registrants / 128 seats = %s voters per seat\n",
+            format(sum(geo$voters), big.mark = ","),
+            format(round(sum(geo$voters) / 128), big.mark = ",")))
+cat(sprintf("Most to least over-represented: %.2f : 1 (%s vs %s)\n",
+            max(geo$per_seat) / min(geo$per_seat),
+            geo$dist_name[which.min(geo$per_seat)],
+            geo$dist_name[which.max(geo$per_seat)]))
+```
+
+## 4.2 Confessional
+
+```{r confessional}
+con <- dc |>
+  summarise(voters = sum(voters), seats = sum(seats), .by = faith) |>
+  mutate(voter_pct = 100 * voters / sum(voters),
+         seat_pct  = 100 * seats  / sum(seats),
+         entitled  = 128 * voters / sum(voters),
+         surplus   = seats - entitled,
+         advantage = seat_pct / voter_pct) |>
+  arrange(desc(surplus))
+
+ktab(con,
+     caption = paste0("Table 4. Confessional apportionment, most to least ",
+                      "over-represented. SLH = ",
+                      sprintf("%.2f", score(dc, "faith")), "."),
+     col.names = c("Confession", "Registered", "Seats", "Voter %", "Seat %",
+                   "Entitled", "Surplus", "Advantage"),
+     digits = c(0, 0, 0, 2, 2, 1, 1, 2))
+```
+
+`Other` is 20,968 registrants with no seat of any kind - not an under-allocated
+confession but an unrepresented one. It is kept in the denominator, which is why the
+advantage column reads 0 rather than blank.
+
+## 4.3 District x faith
+
+Entitlement here is still 128 x the cell's share of the **national** roll, so these
+surpluses are on the same scale as the two tables above and sum to zero across the grid.
+Blank cells have neither seats nor registrants.
+
+```{r cell-grid}
+ABBR <- c(Sunni = "Sunni", Shia = "Shia", Druze = "Druze", Alawite = "Alaw",
+          Maronite = "Maron", `Greek Catholic` = "GkCath", `Greek Orthodox` = "GkOrth",
+          Protestant = "Prot", `Armenian Catholic` = "ArmCath",
+          `Armenian Orthodox` = "ArmOrth", `Christian Minorities` = "ChrMin",
+          Other = "Other")
+
+cell <- dc |>
+  mutate(entitled = 128 * voters / sum(voters),
+         surplus  = seats - entitled)
+
+grid <- cell |>
+  mutate(faith = factor(unname(ABBR[faith]), levels = unname(ABBR)),
+         surplus = if_else(seats == 0 & voters == 0, NA, surplus)) |>
+  select(dist_name, faith, surplus) |>
+  arrange(faith) |>                     # pivot_wider takes column order from the rows
+  pivot_wider(names_from = faith, values_from = surplus) |>
+  arrange(match(dist_name, names(DISTRICT)))
+
+ktab(grid,
+     caption = paste0("Table 5. Seats held minus seats entitled, by district and faith. ",
+                      "Positive = over-represented. SLH = ",
+                      sprintf("%.2f", score(dc, c("district", "faith"))), "."),
+     col.names = c("District", unname(ABBR)),
+     digits = 1) |>
+  column_spec(1, bold = TRUE)
+```
+
+```{r cell-extremes}
+ktab(cell |>
+       slice_max(abs(surplus), n = 15) |>
+       mutate(per_seat = if_else(seats > 0, voters / seats, NA)) |>
+       select(dist_name, faith, seats, voters, entitled, surplus, per_seat),
+     caption = "Table 6. The 15 cells furthest from proportionality, either direction.",
+     col.names = c("District", "Confession", "Seats", "Registered", "Entitled",
+                   "Surplus", "Voters/seat"),
+     digits = c(0, 0, 0, 0, 2, 2, 0))
+
+seatless <- filter(cell, seats == 0, voters > 0)
+cat(sprintf("%d of %d cells have registrants but no seat: %s people, %.1f%% of the roll\n",
+            nrow(seatless), nrow(cell), format(sum(seatless$voters), big.mark = ","),
+            100 * sum(seatless$voters) / sum(cell$voters)))
+```
+
+# 5. Results
+
+## 5.1 Voters per seat, confession by district
+
+```{r vps-matrix, comment = ""}
+vps_mat <- dc |>
+  filter(faith != "Other") |>
+  mutate(vps = if_else(seats > 0, voters / seats / 1000, NA_real_)) |>
+  select(district, faith, vps) |>
+  pivot_wider(names_from = district, values_from = vps) |>
+  arrange(faith)
+
+row_avg <- dc |> filter(faith != "Other") |> summarise(v = sum(voters), s = sum(seats),
+                                                       .by = faith) |>
+  transmute(faith, `All districts` = v / s / 1000)
+col_avg <- dc |> summarise(v = sum(voters), s = sum(seats), .by = district) |>
+  transmute(district, avg = v / s / 1000)
+
+vps_out <- vps_mat |> left_join(row_avg, by = "faith") |>
+  bind_rows(col_avg |> pivot_wider(names_from = district, values_from = avg) |>
+              mutate(faith = "Avg",
+                     `All districts` = sum(dc$voters) / 128 / 1000))
+
+ltab(vps_out,
+     caption = paste0("Registered voters per seat, in thousands, by confession and ",
+                      "electoral district. 2022 Data"),
+     note = paste0("The national figure is ",
+                   format(round(sum(dc$voters) / 128), big.mark = ","),
+                   " registrants per seat (",
+                   sprintf("%.1f", sum(dc$voters) / 128 / 1000), " in thousands). ",
+                   "Districts are abbreviated Bei = Beirut, Bek = Bekaa, ML = Mount Lebanon, ",
+                   "N = North, S = South. Where there is no representative for a given ",
+                   "confession in a district, that value is left blank. The average number of ",
+                   "registrants per representative seat by confession is reported in the ",
+                   "rightmost column, and the average number of registrants per seat by ",
+                   "district is reported in the last row."),
+     label = "voters-per-seat",
+     col.names = c("", DABBR[names(vps_mat)[-1]], "Avg"),
+     digits = 1, fit = TRUE,
+     bold_row = nrow(vps_out), bold_col = ncol(vps_out))
+```
+
+## 5.2 Malapportionment within each district
+
+```{r mal-by-district, comment = ""}
+by_district <- dc |>
+  summarise(gal = gallagher(seats, voters), n_seats = sum(seats), .by = district) |>
+  arrange(desc(gal)) |>
+  transmute(district = DNAME[district], seats = n_seats, gal)
+
+ltab(by_district,
+     caption = paste0("Gallagher index within each electoral district, 2022: the ",
+                      "district's own seats against its own registered voters. Each row ",
+                      "is a separate index computed on that district's totals, so the ",
+                      "values are comparable with one another but do not aggregate."),
+     label = "gal-by-district",
+     col.names = c("District", "Seats", "Gallagher"),
+     digits = c(0, 0, 2))
+```
+
+## 5.3 Malapportionment by district and confession
+
+```{r mal-grid, comment = ""}
+tot_v    <- sum(dc$voters)
+dev_cell <- dc |> mutate(quota = 128 * voters / tot_v, dev = seats - quota)
+
+# Which cells actually return a member. Built in the same row and column order as the
+# grids below, and used by both of them to mark the 59 cells that hold a seat apart from
+# the 121 that have voters but none.
+has_seat <- dc |>
+  mutate(held = seats > 0) |> select(district, faith, held) |> arrange(district) |>
+  pivot_wider(names_from = district, values_from = held) |> arrange(faith)
+seat_mask <- cbind(as.matrix(has_seat[, -1]), Total = FALSE)   # totals never bolded here
+seat_mask <- rbind(seat_mask, rep(FALSE, ncol(seat_mask)))     # nor the summary row
+
+mal_grid <- dev_cell |>
+  select(district, faith, dev) |> arrange(district) |>
+  pivot_wider(names_from = district, values_from = dev) |>
+  arrange(faith) |>
+  mutate(Total = rowSums(pick(where(is.numeric))))
+mal_grid <- bind_rows(mal_grid,
+                      summarise(mal_grid, across(where(is.numeric), sum)) |>
+                        mutate(faith = "All confessions")) |>
+  relocate(faith)
+
+# Three different misallocation counts live in this table, and they are not the same
+# number: the interior gives the cell figure, the row totals the confessional one, the
+# column totals the geographic one.
+seats_wrong      <- sum(abs(dev_cell$dev)) / 2                       # 180 interior cells
+seats_wrong_conf <- sum(abs(mal_grid$Total[-nrow(mal_grid)])) / 2    # 12 row totals
+seats_wrong_geo  <- sum(abs(unlist(mal_grid[nrow(mal_grid), 2:16]))) / 2  # 15 col totals
+
+# The corner is the sum of the row totals and of the column totals alike, and is always
+# zero - every surplus is someone else's deficit. It carries no information and sits
+# exactly where a reader looks for the headline, so it is checked and then left blank.
+stopifnot(abs(mal_grid$Total[nrow(mal_grid)]) < 1e-9)
+mal_grid$Total[nrow(mal_grid)] <- NA_real_
+
+ltab(mal_grid,
+     caption = "Malapportioned seats in status quo by confession and district, 2022.",
+     note = paste0("Districts are abbreviated as in Table \\ref{tab:voters-per-seat}. ",
+                   "Malapportioned seats computed by subtracting the seats allocated to a ",
+                   "given confession in a district from the proportion of seats that would be ",
+                   "allocated to that subgroup by share of population."),
+     label = "mal-grid",
+     col.names = c("Confession", DABBR[names(mal_grid)[2:16]], "Total"),
+     digits = 2, fit = TRUE, bold_cells = seat_mask,
+     bold_row = nrow(mal_grid), bold_col = ncol(mal_grid))
+
+# Everything is recoverable from this grid. A seat is 100/128 of a percentage point, so
+# each seat count is its index times 1.28.
+stopifnot(
+  abs(seats_wrong      - score(dc, c("district", "faith")) * 1.28) < 1e-9,
+  abs(seats_wrong_conf - score(dc, "faith")    * 1.28)             < 1e-9,
+  abs(seats_wrong_geo  - score(dc, "district") * 1.28)             < 1e-9,
+  abs(sqrt(sum(dev_cell$dev^2) / 2) / 1.28 -
+        score_g(dc, c("district", "faith")))                       < 1e-9)
+
+cat(sprintf("\nseats in the wrong cell      %5.1f\nwrong confession nationally  %5.1f\nwrong district nationally    %5.1f\n",
+            seats_wrong, seats_wrong_conf, seats_wrong_geo))
+```
+
+## 5.4 The same grid, as shares of the Gallagher index
+
+```{r gal-grid, comment = ""}
+gal_cell <- dc |>
+  mutate(dev = 100 * seats / 128 - 100 * voters / tot_v) |>
+  mutate(share = 100 * dev^2 / sum(dev^2))
+
+gal_grid <- gal_cell |>
+  select(district, faith, share) |> arrange(district) |>
+  pivot_wider(names_from = district, values_from = share) |>
+  arrange(faith) |>
+  mutate(Total = rowSums(pick(where(is.numeric))))
+gal_grid <- bind_rows(gal_grid,
+                      summarise(gal_grid, across(where(is.numeric), sum)) |>
+                        mutate(faith = "All confessions")) |>
+  relocate(faith)
+
+ltab(gal_grid,
+     caption = paste0("Share of the district-by-confession Gallagher score, in percent, ",
+                      "by confession and district, 2022. Districts are abbreviated as in ",
+                      "Table \\ref{tab:voters-per-seat}."),
+     note = paste0("Each entry is the cell's contribution to the squared index, so the ",
+                   "entries sum to 100."),
+     label = "gal-grid",
+     col.names = c("Confession", DABBR[names(gal_grid)[2:16]], "Total"),
+     digits = 1, fit = TRUE, bold_cells = seat_mask,
+     bold_row = nrow(gal_grid), bold_col = ncol(gal_grid))
+
+# The shares decompose the SQUARE of the index, so a margin returns to Gallagher units by
+# taking the root: sqrt(share/100) * G is that unit's slice, and the slices combine in
+# quadrature to G itself.
+G_cell <- score_g(dc, c("district", "faith"))
+slices <- sqrt(gal_cell |> summarise(s = sum(dev^2) / 2, .by = district) |> pull(s))
+stopifnot(abs(sum(gal_cell$share) - 100) < 1e-9,
+          abs(sqrt(sum(slices^2)) - G_cell) < 1e-9,
+          abs(gal_grid$Total[nrow(gal_grid)] - 100) < 1e-9)
+```
+
+## 5.5 The best allocation under the 64-64 rule
+
+```{r optima, comment = ""}
+BL <- c(Sunni = "Muslim", Shia = "Muslim", Druze = "Muslim", Alawite = "Muslim",
+        Maronite = "Christian", `Greek Catholic` = "Christian",
+        `Greek Orthodox` = "Christian", Protestant = "Christian",
+        `Armenian Catholic` = "Christian", `Armenian Orthodox` = "Christian",
+        `Christian Minorities` = "Christian", Other = "Other")
+cv <- tibble(key = key180, district = cells$district, vfaith = cells$faith,
+             s0 = S0, v = V0) |>
+  filter(v > 0) |> mutate(bloc = unname(BL[vfaith]), quota = 128 * v / sum(v))
+ix_cv <- function(sv) { S <- rep(0, length(key180)); S[match(cv$key, key180)] <- sv; indices(S) }
+
+di <- match(cv$district, unname(DISTRICT)); fi <- match(cv$vfaith, faiths12)
+agg_l <- function(x, m, k) as.vector(tapply(x, factor(m, levels = seq_len(k)), sum, default = 0))
+Qd <- agg_l(cv$quota, di, 15); Qf <- agg_l(cv$quota, fi, 12)
+
+# Moving a seat i -> j changes sum(s-q)^2 at a level by 2[(s_j-q_j)-(s_i-q_i)]+2, counted
+# only where i and j differ at that level. All three are analytic, so every legal move can
+# be scored at once.
+optimise_idx <- function(which_idx, max_k = 60) {
+  s <- cv$s0
+  for (step in seq_len(max_k)) {
+    d  <- s - cv$quota
+    Sd <- agg_l(s, di, 15) - Qd; Sf <- agg_l(s, fi, 12) - Qf
+    prim <- switch(which_idx,
+      cell = outer(-d, d, "+"),
+      geo  = { m <- outer(-Sd[di], Sd[di], "+"); m[outer(di, di, "==")] <- NA; m },
+      conf = { m <- outer(-Sf[fi], Sf[fi], "+"); m[outer(fi, fi, "==")] <- NA; m })
+    prim <- 2 * prim + 2
+    tie  <- 2 * outer(-d, d, "+") + 2
+    legal <- outer(s >= 1, rep(TRUE, length(s))) & outer(cv$bloc, cv$bloc, "==")
+    diag(legal) <- FALSE
+    prim[!legal] <- NA; tie[!legal] <- NA
+    prim[is.na(prim)] <- 0                       # neutral at this level
+    cand <- which(prim < -1e-9 | (abs(prim) < 1e-9 & tie < -1e-9))
+    if (!length(cand)) break
+    best <- cand[order(prim[cand], tie[cand])[1]]
+    i <- ((best - 1) %% nrow(prim)) + 1; j <- ((best - 1) %/% nrow(prim)) + 1
+    s[i] <- s[i] - 1L; s[j] <- s[j] + 1L
+  }
+  s
+}
+
+opt <- map(set_names(c("geo", "conf", "cell")), optimise_idx)
+z0  <- ix_cv(cv$s0)
+
+# The unconstrained optimum, for reference: no bloc constraint at all, seats handed out one
+# at a time to whichever cell gains most. Both |s - q| and (s - q)^2 are convex in s, so a
+# one-at-a-time allocation from zero is exactly optimal - and here the two objectives
+# return the same table, so one calculation serves for both indices.
+greedy_free <- function(q, total, obj = c("L2", "L1")) {
+  obj <- match.arg(obj); s <- rep(0L, length(q))
+  for (k in seq_len(total)) {
+    gain <- if (obj == "L2") (s + 1 - q)^2 - (s - q)^2 else abs(s + 1 - q) - abs(s - q)
+    i <- which.min(gain); s[i] <- s[i] + 1L
+  }
+  s
+}
+free_cell <- greedy_free(cv$quota, 128L, "L2")
+stopifnot(identical(free_cell, greedy_free(cv$quota, 128L, "L1")))   # the two agree here
+
+# --- one national district ----------------------------------------------------
+# Abolishing the districts collapses the 180 cells onto the 12 confessions, so the seat
+# table is a national confessional quota and nothing else. Two consequences, both by
+# construction rather than by merit: the single district holds 100 per cent of the seats
+# and 100 per cent of the voters, so geographic malapportionment is exactly zero; and the
+# cell index becomes the confessional index, because the cells are now the confessions.
+hamilton <- function(v, total) {
+  q <- total * v / sum(v); w <- floor(q); left <- total - sum(w)
+  if (left > 0) { i <- order(q - w, decreasing = TRUE)[seq_len(left)]; w[i] <- w[i] + 1L }
+  as.integer(w)
+}
+natl <- dc |> summarise(v = sum(voters), s0 = sum(seats), .by = faith) |>
+  mutate(bloc = unname(BL[faith]), q = 128 * v / sum(v)) |> arrange(faith)
+
+# Parity kept: each bloc's 64 seats shared out in proportion to that bloc's own voters,
+# which is what a national district under the 64-64 rule would mean in practice.
+natl$parity <- 0L
+for (b in c("Christian", "Muslim")) {
+  k <- natl$bloc == b; natl$parity[k] <- hamilton(natl$v[k], 64L)
+}
+natl$free <- hamilton(natl$v, 128L)
+stopifnot(sum(natl$parity) == 128, sum(natl$free) == 128,
+          sum(natl$parity[natl$bloc == "Christian"]) == 64)
+
+natl_row <- function(col, lab)
+  tibble(minimised = lab,
+         moves = sum(abs(natl[[col]] - natl$s0)) / 2, districts = NA_integer_,
+         gal_geo = 0, gal_conf = gallagher(natl[[col]], natl$v),
+         gal_cell = gallagher(natl[[col]], natl$v),
+         mal_cell = mal(natl[[col]], natl$v),
+         mal_seats = mal(natl[[col]], natl$v) * 1.28)
+optab <- imap_dfr(opt, function(s, nm) {
+  z <- ix_cv(s)
+  tibble(minimised = c(geo = "Geographic", conf = "Confessional", cell = "Cell")[[nm]],
+         moves = sum(abs(s - cv$s0)) / 2,
+         districts = n_distinct(cv$district[s != cv$s0]),
+         gal_geo = z[["gal_geo"]], gal_conf = z[["gal_conf"]], gal_cell = z[["gal_cell"]],
+         mal_cell = z[["mal_cell"]], mal_seats = z[["mal_cell"]] * 1.28)
+})
+
+# The table shows three seat tables: today's, the best attainable under the 64-64 rule, and
+# one national district. The other optima computed above - geographic, confessional, and
+# the two parity-dropped variants - are reported in the prose instead, since they are
+# reference points rather than proposals.
+# One helper so the status-quo row and the parity-dropped row are built the same way: neither
+# comes out of `opt`, which holds only the parity-respecting optima.
+opt_row <- function(sv, label) {
+  z <- ix_cv(sv)
+  tibble(table = label,
+         moves = sum(abs(sv - cv$s0)) / 2,
+         districts = n_distinct(cv$district[sv != cv$s0]),
+         gal_geo = z[["gal_geo"]], gal_conf = z[["gal_conf"]], gal_cell = z[["gal_cell"]],
+         mal_cell = z[["mal_cell"]], mal_seats = z[["mal_cell"]] * 1.28)
+}
+
+# The parity-dropped row sits SECOND, immediately under the status quo: read down the first three
+# rows and the 64-64 rule's cost is the gap between rows 2 and 3, on a common baseline. It is a
+# BOUND on what is attainable, not a proposal.
+optab <- bind_rows(
+  opt_row(cv$s0, "Status Quo"),
+  opt_row(free_cell, "Proportional Ideal (without Taif Agreement)"),
+  optab |> filter(minimised == "Cell") |>
+    mutate(minimised = "Best Alternative (with Taif Agreement)") |> rename(table = minimised),
+  # Two single-district rows. The first dissolves the districts and keeps today's twelve
+  # confessional totals, so it moves no seats; the second also recomputes those totals within
+  # each bloc (section 5.7 takes the two apart).
+  natl_row("s0", "Single National District (Status Quo Allocation)") |> rename(table = minimised),
+  natl_row("parity", "Single National District (Reallocation)") |> rename(table = minimised))
+
+stopifnot(nrow(optab) == 5L,
+          optab$moves[1] == 0, optab$districts[1] == 0,
+          # the status-quo row must reproduce the figures section 4 reports
+          abs(optab$gal_cell[1] - z0[["gal_cell"]]) < 1e-9,
+          # the parity-dropped row drops parity: 41 Christian to 87 Muslim
+          sum(free_cell[cv$bloc == "Christian"]) == 41L,
+          sum(free_cell[cv$bloc == "Muslim"]) == 87L,
+          identical(optab$table[2], "Proportional Ideal (without Taif Agreement)"),   # second line
+          # dissolving the districts alone moves no seats and leaves the confessional index as is
+          optab$moves[4] == 0, optab$gal_geo[4] == 0,
+          abs(optab$gal_conf[4] - z0[["gal_conf"]]) < 1e-9,
+          # and it is strictly better than the parity-respecting optimum on the cell index
+          optab$gal_cell[2] < optab$gal_cell[3])
+
+# The table is emitted at the end of section 6, once the diaspora scenarios it also carries
+# have been built. Nothing is printed here.
+```
+
+## 5.6 What the best alternative allocation changes
+
+```{r opt-grid, comment = ""}
+# Seat change per cell, and the Gallagher slice of any group of cells, before and after.
+optcells <- cv |> mutate(new = opt$cell, d = new - s0,
+                         dev0 = 100 * s0  / 128 - 100 * v / sum(cv$v),
+                         dev1 = 100 * new / 128 - 100 * v / sum(cv$v))
+slice_delta <- function(g) sqrt(sum(g$dev1^2) / 2) - sqrt(sum(g$dev0^2) / 2)
+d_gal <- function(by) optcells |> group_by(across(all_of(by))) |>
+  group_modify(\(g, k) tibble(dgal = slice_delta(g))) |> ungroup() |> arrange(.data[[by]])
+
+# The body holds whole seats and two of the margins hold Gallagher changes; `digits`
+# applies down a whole column, so the table is assembled as text, each part formatted its
+# own way.
+as_seats <- function(x) if_else(is.na(x), "", formatC(x, format = "d"))
+as_gal   <- function(x) formatC(x, format = "f", digits = 3)
+
+by_faith_seats <- optcells |> summarise(net = sum(d), .by = vfaith) |> arrange(vfaith)
+by_dist_seats  <- optcells |> summarise(net = sum(d), .by = district) |> arrange(district)
+by_faith_gal   <- d_gal("vfaith")
+by_dist_gal    <- d_gal("district")
+stopifnot(sum(by_faith_seats$net) == 0, sum(by_dist_seats$net) == 0)   # it is a swap
+
+opt_grid <- optcells |>
+  mutate(cell = if_else(s0 == 0 & new == 0, NA_real_, as.numeric(d))) |>
+  select(district, vfaith, cell) |> arrange(district) |>
+  pivot_wider(names_from = district, values_from = cell) |> arrange(vfaith) |>
+  mutate(across(-vfaith, as_seats),
+         Seats = as_seats(by_faith_seats$net), Gallagher = as_gal(by_faith_gal$dgal))
+
+# Two summary rows: net seats by district, then that district's change in Gallagher. Only
+# the second has a meaningful corner - net seats necessarily sum to zero, so that cell is
+# left blank rather than printed as a nought.
+mk_row <- function(label, vals, seats = "", gal = "")
+  as_tibble(c(list(vfaith = label), as.list(vals),
+              list(Seats = seats, Gallagher = gal)))
+opt_grid <- bind_rows(
+  opt_grid,
+  mk_row("Net change", setNames(as_seats(by_dist_seats$net), by_dist_seats$district)),
+  mk_row("Change in Gallagher", setNames(as_gal(by_dist_gal$dgal), by_dist_gal$district),
+         gal = as_gal(slice_delta(optcells))))
+
+# Bold the cells that change, and both margin columns. The two summary rows are bolded by
+# bold_row, so they are FALSE here and \textbf never nests.
+chg_mask <- optcells |>
+  mutate(chg = d != 0) |> select(district, vfaith, chg) |> arrange(district) |>
+  pivot_wider(names_from = district, values_from = chg) |> arrange(vfaith)
+chg_mask <- cbind(as.matrix(chg_mask[, -1]), Seats = TRUE, Gallagher = TRUE)
+chg_mask[is.na(chg_mask)] <- FALSE      # the one pair with no registrants anywhere
+chg_mask <- rbind(chg_mask, rep(FALSE, ncol(chg_mask)), rep(FALSE, ncol(chg_mask)))
+
+ltab(opt_grid,
+     caption = paste0("Seats gained and lost from Status Quo to Best Alternative under ",
+                      "Taif Agreement."),
+     note = "Districts are abbreviated as in Table \\ref{tab:voters-per-seat}.",
+     label = "opt-grid",
+     col.names = c("Confession", DABBR[names(opt_grid)[2:16]], "Net Change", "Gallagher"),
+     align = paste0("l", strrep("r", 17)), fit = TRUE,
+     bold_cells = chg_mask, bold_row = c(nrow(opt_grid) - 1L, nrow(opt_grid)))
+
+stopifnot(sum(abs(optcells$d)) / 2 == 27,
+          abs(slice_delta(optcells) -
+                (ix_cv(opt$cell)[["gal_cell"]] - z0[["gal_cell"]])) < 1e-9)
+```
+
+```{r opt-detail, comment = ""}
+ch <- cv |> mutate(d = opt$cell - s0) |> filter(d != 0)
+netchange_tab <- bind_rows(
+  ch |> summarise(net = sum(d), .by = vfaith) |> filter(net != 0) |>
+    arrange(desc(net)) |> transmute(grouping = "Confession", unit = vfaith, net),
+  ch |> summarise(net = sum(d), .by = district) |> filter(net != 0) |>
+    arrange(desc(net)) |> transmute(grouping = "District", unit = DNAME[district], net))
+
+# The grouping column becomes pack_rows subheadings, which reads better in print and
+# needs only \multicolumn.
+ltab(netchange_tab |> select(-grouping),
+     caption = paste0("Net seat change under the cell-optimal table (",
+                      sum(abs(ch$d)) / 2, " moves across ", nrow(ch),
+                      " cells), grouped by confession and by district."),
+     label = "net-change",
+     col.names = c("Unit", "Net seats"), digits = 0,
+     pack = table(factor(netchange_tab$grouping,
+                         levels = unique(netchange_tab$grouping))))
+```
+
+## 5.7 What one national district changes
+
+```{r natl-decomp, comment = ""}
+# One national district with TWO seat tables: today's confessional totals kept as they are
+# (`natl$s0`), and the within-bloc proportional recomputation (`natl$parity`) that section 5.5
+# reports. With one district the twelve confessions ARE the cells, so a single formula serves.
+nd_ix <- function(sv) {
+  dev <- 100 * sv / sum(sv) - 100 * natl$v / sum(natl$v)
+  c(mal = sum(abs(dev)) / 2, gal = sqrt(sum(dev^2) / 2))
+}
+nd_sq <- nd_ix(natl$s0); nd_pa <- nd_ix(natl$parity)
+
+# Geographic malapportionment is exactly zero for BOTH single-district rows, by construction and
+# not by merit: one unit holds 100 per cent of the seats and 100 per cent of the voters.
+natl_decomp <- tibble(
+  scenario  = c("Status quo, fifteen districts", "One district, present seat table",
+                "One district, seats recomputed in bloc"),
+  districts = c(15L, 1L, 1L),
+  moves     = c(0L, 0L, as.integer(sum(abs(natl$parity - natl$s0)) / 2)),
+  mal_geo   = c(score(dc, "district"), 0, 0),
+  gal_geo   = c(score_g(dc, "district"), 0, 0),
+  mal_conf  = c(score(dc, "faith"),   nd_sq[["mal"]], nd_pa[["mal"]]),
+  gal_conf  = c(score_g(dc, "faith"), nd_sq[["gal"]], nd_pa[["gal"]]))
+
+# The whole point of the first two rows: abolishing the districts moves the CONFESSIONAL index
+# not at all, because confessional totals are a property of the seat table and not of how the
+# districts are drawn. Asserted rather than asserted in prose only.
+stopifnot(
+  all.equal(nd_sq[["mal"]], base_ix[["mal_conf"]]),
+  all.equal(nd_sq[["gal"]], base_ix[["gal_conf"]]),
+  natl_decomp$moves[2] == 0L, natl_decomp$moves[3] == 7L,
+  # and the reallocation half moves the GEOGRAPHIC index not at all - it is already zero
+  natl_decomp$gal_geo[2] == natl_decomp$gal_geo[3],
+  # parity is respected in both single-district tables
+  sum(natl$s0[natl$bloc == "Christian"]) == 64L,
+  sum(natl$parity[natl$bloc == "Christian"]) == 64L)
+
+ltab(natl_decomp,
+     caption = paste0("One national district, taken apart. The second row abolishes the ",
+       "districts and changes nothing else - the twelve confessional totals stay exactly as ",
+       "they are today - and the third then recomputes those totals in proportion to each ",
+       "bloc's own voters, keeping 64--64. \\emph{Moves} counts the seats that change hands ",
+       "relative to the present table. Geographic malapportionment is zero in both ",
+       "single-district rows \\emph{by construction}, one unit holding all the seats and all ",
+       "the voters, and with one district the twelve confessions are the cells, so the cell ",
+       "index equals the confessional one and is not shown separately. Confessional figures ",
+       "are comparable down the column: there are twelve confessions in every row."),
+     label = "natl-decomp",
+     col.names = c("Scenario", "Districts", "Seat moves", "SLH: geographic",
+                   "Gallagher: geographic", "SLH: confessional",
+                   "Gallagher: confessional"),
+     align = "lrrrrrr", digits = c(0, 0, 0, 2, 3, 2, 3))
+```
+
+```{r natl-grid, comment = ""}
+# Same shape as the grid in 5.6, with the fifteen district columns collapsed into the one
+# that remains.
+#
+# The Gallagher column is measured at the CONFESSIONAL level on both sides. It has to be:
+# a national district has twelve cells where the current table has 180, and Gallagher is
+# not monotone under refinement (section 1), so comparing 5.358 over 180 cells with 9.494
+# over twelve would mostly measure the change of units. At the confessional level the two
+# tables are directly comparable, and the slices still combine in quadrature - to 10.629
+# before and 9.494 after.
+natl_cells <- natl |>
+  mutate(d = parity - s0,
+         dev0 = 100 * s0     / 128 - 100 * v / tot_v,
+         dev1 = 100 * parity / 128 - 100 * v / tot_v,
+         s_before = sqrt(dev0^2 / 2), s_after = sqrt(dev1^2 / 2),
+         dgal = s_after - s_before) |>
+  arrange(faith)
+
+as_seats <- function(x) if_else(is.na(x), "", formatC(x, format = "d"))
+as_gal   <- function(x) formatC(x, format = "f", digits = 3)
+gal_tot  <- sqrt(sum(natl_cells$s_after^2)) - sqrt(sum(natl_cells$s_before^2))
+
+natl_grid <- natl_cells |>
+  transmute(faith,
+            nat = as_seats(if_else(s0 == 0 & parity == 0, NA_integer_, as.integer(d))),
+            net = as_seats(if_else(s0 == 0 & parity == 0, NA_integer_, as.integer(d))),
+            Gallagher = as_gal(dgal))
+
+# Foot rows. The district margin reports how many seats change hands, not the net: the one
+# district holds all 128 seats before and after, so its net is necessarily zero and would
+# say nothing. Half the sum of the absolute changes is the count that actually moves,
+# matching how seats moved is counted everywhere else in this section.
+natl_grid <- bind_rows(
+  natl_grid,
+  tibble(faith = "Seats changed", nat = as_seats(sum(abs(natl_cells$d)) / 2),
+         net = "", Gallagher = ""),
+  tibble(faith = "Change in Gallagher", nat = as_gal(gal_tot),
+         net = "", Gallagher = as_gal(gal_tot)))
+
+natl_mask <- rbind(cbind(natl_cells$d != 0, TRUE, TRUE), rep(FALSE, 3), rep(FALSE, 3))
+
+ltab(natl_grid,
+     caption = paste0("Seats gained and lost with a Single National District ",
+                      "(With Reallocation)"),
+     label = "natl-grid",
+     col.names = c("Confession", "National District", "Net Change",
+                   "Gallagher (Confessional)"),
+     align = "lrrr", bold_cells = natl_mask,
+     bold_row = c(nrow(natl_grid) - 1L, nrow(natl_grid)))
+
+stopifnot(sum(natl$parity) == 128, sum(natl_cells$d) == 0,   # a swap: the net is zero
+          sum(abs(natl_cells$d)) / 2 == 7,                   # but seven seats move
+          abs(sqrt(sum(natl_cells$s_before^2)) - score_g(dc, "faith"))           < 1e-9,
+          abs(sqrt(sum(natl_cells$s_after^2))  - gallagher(natl$parity, natl$v)) < 1e-9)
+```
+
+# 6. A separate diaspora district
+
+## 6.1 Three scenarios
+
+```{r dia-alloc, comment = ""}
+# Diaspora registrants are `registered_total - registered_resident`, already carried in `dc`
+# from section 2. The country x district x sect file is a strict refinement of the same counts;
+# it is read here to CHECK that and to report where the electorate sits, which nothing else in
+# this document shows.
+dia_ctry <- read.csv(
+  "data/population - registered voters/diaspora_voters_by_country_district_sect.csv",
+  fileEncoding = "UTF-8-BOM") |>
+  mutate(district = unname(DISTRICT[major_district]), faith = sect_en)
+
+# Checked at BOTH grains. The country file resolves to minor district x sect, the grain
+# `voters_by_district_sect_long.csv` is published at, so the 299-cell agreement there is the
+# strong check; `dc` is aggregated to the fifteen major districts and can only be checked on
+# its own 180-cell grid. Neither file stores a row for a cell with nobody in it, so the missing
+# side is filled with 0 rather than counted as a disagreement.
+vlong <- read.csv("data/population - registered voters/voters_by_district_sect_long.csv",
+                  fileEncoding = "UTF-8-BOM")
+zjoin <- function(a, b, by) full_join(a, b, by = by) |>
+  mutate(across(c(a, b), \(x) replace_na(x, 0)))
+chk_minor <- zjoin(summarise(dia_ctry, a = sum(registered_diaspora),
+                             .by = c(minor_district_en, sect_en)),
+                   summarise(vlong, b = sum(registered_total - registered_resident),
+                             .by = c(minor_district_en, sect_en)),
+                   c("minor_district_en", "sect_en"))
+chk_major <- zjoin(summarise(dia_ctry, a = sum(registered_diaspora), .by = c(district, faith)),
+                   summarise(dc, b = sum(voters - residents), .by = c(district, faith)),
+                   c("district", "faith"))
+stopifnot(nrow(vlong) == 299, nrow(chk_minor) == 299, all(chk_minor$a == chk_minor$b),
+          nrow(chk_major) == 180, all(chk_major$a == chk_major$b))
+
+DIA   <- "diaspora"
+dia_f <- dc |>
+  summarise(v = sum(voters - residents), res = sum(residents), .by = faith) |>
+  mutate(bloc = unname(BL[faith])) |>
+  arrange(faith)
+stopifnot(sum(dia_f$v) == sum(dia_ctry$registered_diaspora), sum(dia_f$v) == 225624)
+
+# `Other` holds no seat anywhere in the current table and is not given one here, so the seat
+# allocation runs over the eleven confessions that do. Its registrants stay in every voter
+# denominator, exactly as section 2 keeps them in `dc`.
+seatable <- dia_f$bloc != "Other"
+
+# S: Article 112 NAMES the six sects - one seat each to Maronite, Greek Orthodox, Greek
+# Catholic, Sunni, Shia and Druze - so there is no allocation rule to apply. An earlier version
+# of this chunk shared three seats per bloc by largest remainder on that bloc's own registrants,
+# which gave Maronites two and Greek Catholics none; that is not what the statute says.
+STAT6 <- c("Maronite", "Greek Orthodox", "Greek Catholic", "Sunni", "Shia", "Druze")
+stopifnot(all(STAT6 %in% dia_f$faith))
+dia_f$s_S <- as.integer(dia_f$faith %in% STAT6)
+
+# P: seven seats by largest remainder across all eleven seat-holding confessions at once, so
+# the bloc split falls out rather than being imposed.
+dia_f$s_P <- 0L
+dia_f$s_P[seatable] <- hamilton(dia_f$v[seatable], 7L)
+
+dia_bloc <- function(col) c(
+  Christian = sum(dia_f[[col]][dia_f$bloc == "Christian"]),
+  Muslim    = sum(dia_f[[col]][dia_f$bloc == "Muslim"]))
+stopifnot(sum(dia_f$s_S) == 6L, sum(dia_f$s_P) == 7L,
+          all(dia_bloc("s_S") == c(3L, 3L)),      # named by statute, sect by sect
+          all(dia_bloc("s_P") == c(4L, 3L)),      # an output of the diaspora roll
+          # the statute's six sects are exactly the six largest confessions abroad
+          setequal(STAT6, (dia_f |> filter(bloc != "Other") |> slice_max(v, n = 6))$faith),
+          # and P differs from S by exactly one seat, a second Maronite one
+          sum(abs(dia_f$s_P - dia_f$s_S)) == 1L,
+          dia_f$s_P[dia_f$faith == "Maronite"] - dia_f$s_S[dia_f$faith == "Maronite"] == 1L)
+
+alloc_tab <- dia_f |>
+  filter(v > 0) |>
+  transmute(faith, bloc,
+            registrants = v,
+            pct_dia = 100 * v / sum(dia_f$v),
+            pct_res = 100 * res / sum(dia_f$res),
+            # `Other` is outside the seat allocation, so it has no quota rather than a
+            # quota of zero; the seat-holding confessions' quotas sum to exactly 6 and 7.
+            # Under S the quota is what the sect WOULD be owed - the statute ignores it and
+            # awards one seat each to six named sects, so the gap column is the distortion.
+            q_S = if_else(bloc == "Other", NA_real_, 6 * v / sum(dia_f$v[seatable])), s_S,
+            gap_S = if_else(bloc == "Other", NA_real_, s_S - 6 * v / sum(dia_f$v[seatable])),
+            q_P = if_else(bloc == "Other", NA_real_, 7 * v / sum(dia_f$v[seatable])), s_P) |>
+  arrange(desc(registrants))
+
+alloc_tab <- bind_rows(alloc_tab, tibble(
+  faith = "Total", bloc = "", registrants = sum(dia_f$v), pct_dia = 100, pct_res = 100,
+  q_S = 6, s_S = sum(dia_f$s_S), gap_S = 0, q_P = 7, s_P = sum(dia_f$s_P)))
+stopifnot(all.equal(sum(alloc_tab$q_S, na.rm = TRUE), 12),   # body sums to 6, plus the foot
+          all.equal(sum(alloc_tab$q_P, na.rm = TRUE), 14))
+
+ltab(alloc_tab,
+     caption = paste0("The diaspora district's seats by confession, 2022 register. ",
+       "\\emph{Share of roll} columns compare each confession's weight among the 225,624 ",
+       "registrants abroad with its weight among the 3,741,883 resident registrants: the ",
+       "diaspora roll is 52.8 per cent Christian against 33.2 per cent at home, and ",
+       "Maronites are 32.1 per cent of it. \\emph{Quota} is the confession's exact claim on ",
+       "the six or seven seats, over the eleven confessions that hold a seat anywhere in the ",
+       "current table (\\emph{Other} is not given one, and keeps its registrants in the ",
+       "denominator). Scenario S is Article 112 as written: one seat each to six \\emph{named} ",
+       "sects, so the \\emph{Gap} column is the distortion that fixed award imposes, not a ",
+       "rounding residue. Scenario P allocates all seven by largest remainder, so its 4--3 ",
+       "bloc split is an output. The statute's six sects are exactly the six largest ",
+       "confessions abroad, and P differs from S by a single seat -- a second Maronite one."),
+     label = "dia-alloc",
+     col.names = c("Confession", "Bloc", "Registrants abroad", "% of diaspora roll",
+                   "% of resident roll", "Quota (6)", "S", "Gap", "Quota (7)", "P"),
+     align = "llrrrrrrrr", digits = c(0, 0, 0, 2, 2, 2, 0, 2, 2, 0), fit = TRUE,
+     bold_row = nrow(alloc_tab))
+```
+
+## 6.2 Which domestic seats pay for the diaspora district
+
+```{r dia-carve, comment = ""}
+# Removing a seat from cell i changes sum(s - q)^2 by -2(s_i - q_i) + 1, so the seat to take is
+# always the one in the cell furthest above its quota. The objective is separable and convex in
+# s, so removing them one at a time is exactly optimal - the argument section 5.5 makes for the
+# greedy reallocation there, run in reverse. The blocs are independent: the quota is fixed, so
+# drawing one bloc down cannot change which cell is chosen in the other.
+drop_from_bloc <- function(s, q, bloc, n_by_bloc) {
+  for (b in names(n_by_bloc)) for (k in seq_len(n_by_bloc[[b]])) {
+    i <- which(bloc == b & s >= 1L)
+    stopifnot(length(i) > 0L)
+    i <- i[which.max((s - q)[i])]
+    s[i] <- s[i] - 1L
+  }
+  s
+}
+
+dom <- dc |>
+  select(district, dist_name, faith, seats, voters, residents) |>
+  mutate(bloc = unname(BL[faith])) |>
+  arrange(district, faith)
+M_dom_P  <- 128L - sum(dia_f$s_P)                                        # 121
+dom$q_P  <- M_dom_P * dom$residents / sum(dom$residents)
+dom$s_P  <- drop_from_bloc(as.integer(dom$seats), dom$q_P, dom$bloc,
+                           as.list(dia_bloc("s_P")))
+
+# --- the fold-in phase: the statutory SIX inside 128, so the domestic table drops to 122 ----
+# The article returns the six seats "from the same confessions" they were awarded to, so the
+# CONFESSION of each withdrawal is fixed by statute - one seat back from each of the six named
+# sects - and only the DISTRICT is free. That choice is made by minimising Gallagher within the
+# confession, which is the same rule used for P7 below.
+#
+# Minimising sum((s - q)^2) IS minimising Gallagher: with q = T * v / sum(v) a cell's deviation
+# is dev = (100/T)(s - q), so at a fixed chamber size the two objectives differ only by a
+# positive constant and the same withdrawal is optimal for both.
+#
+# Note parity comes free here: the six named sects are three Christian and three Muslim, so
+# taking one seat from each holds the national 64-64 without a bloc constraint being imposed.
+M_dom_F <- 128L - sum(dia_f$s_S)                                         # 122
+dom$q_F <- M_dom_F * dom$residents / sum(dom$residents)
+
+s_F <- as.integer(dom$seats)
+for (f in STAT6) {
+  i <- which(dom$faith == f & s_F >= 1L)
+  j <- i[which.max((s_F - dom$q_F)[i])]
+  s_F[j] <- s_F[j] - 1L
+}
+dom$s_F <- s_F
+
+stopifnot(sum(dom$s_P) == M_dom_P, all(dom$s_P >= 0L),
+          sum(dom$seats - dom$s_P) == 7L,
+          sum(dom$s_F) == M_dom_F, all(dom$s_F >= 0L),
+          sum(dom$seats - dom$s_F) == 6L,
+          # parity holds at 64-64 without being imposed - the six named sects are 3C/3M
+          sum(dom$s_F[dom$bloc == "Christian"]) + dia_bloc("s_S")[["Christian"]] == 64L,
+          sum(dom$s_F[dom$bloc == "Muslim"])    + dia_bloc("s_S")[["Muslim"]]    == 64L,
+          # S128 is confessionally NEUTRAL BY CONSTRUCTION: it hands each named sect one diaspora
+          # seat and takes one domestic seat back from that same sect, so no confession's
+          # national total moves at all. Checked, not assumed.
+          {
+            nb <- summarise(dc, s = sum(seats), .by = faith) |> arrange(faith)
+            ng <- bind_rows(transmute(dom, faith, s = s_F),
+                            transmute(dia_f, faith, s = s_S)) |>
+                  summarise(s = sum(s), .by = faith) |> arrange(faith)
+            identical(nb$faith, ng$faith) && all(nb$s == ng$s)
+          },
+          # national parity: 64-64 under P, 67-67 under S
+          sum(dom$s_P[dom$bloc == "Christian"]) + dia_bloc("s_P")[["Christian"]] == 64L,
+          sum(dom$s_P[dom$bloc == "Muslim"])    + dia_bloc("s_P")[["Muslim"]]    == 64L,
+          sum(dom$seats[dom$bloc == "Christian"]) + dia_bloc("s_S")[["Christian"]] == 67L,
+          sum(dom$seats[dom$bloc == "Muslim"])    + dia_bloc("s_S")[["Muslim"]]    == 67L)
+
+# One row per cell that any of the three fundings touches, so the three can be compared at a
+# glance. A blank means that scenario leaves the cell alone.
+carve <- dom |>
+  filter(s_P != seats | s_F != seats) |>
+  transmute(dist_name, faith, bloc, seats, residents,
+            d_F = as.integer(s_F - seats), d_P = as.integer(s_P - seats),
+            surplus = seats - q_P) |>
+  arrange(bloc, desc(surplus))
+blank0 <- function(x) if_else(x == 0L, "", formatC(x, format = "d"))
+carve_out <- carve |> mutate(across(c(d_F, d_P), blank0))
+stopifnot(sum(carve$d_P) == -7L, sum(carve$d_F) == -6L)
+
+ltab(carve_out |> select(-bloc),
+     caption = paste0("The domestic seats each funding takes, one row per cell any of them ",
+       "touches, Christian cells first. \\emph{Surplus} is how far the cell sits above its ",
+       "claim on 121 seats measured against resident registrants only. Blank means the scenario ",
+       "leaves the cell alone. The two differ in kind, not just in size: S128 must take one seat ",
+       "back from each of the six sects Article 112 names, so it reaches Greek Orthodox, Greek ",
+       "Catholic and Sunni cells; P7 is free to follow the index and so concentrates on the most ",
+       "diaspora-heavy Maronite cells, taking two from Mount Lebanon I. The Druze cell in Beirut ",
+       "II and the Alawite cell in North I would lose their district's only seat of that ",
+       "confession - a larger change than the arithmetic shows, see the caution below."),
+     label = "dia-carve",
+     col.names = c("District", "Confession", "Seats now", "Resident registrants",
+                   "S128", "P7", "Surplus"),
+     align = "llrrrrr", digits = c(0, 0, 0, 0, 0, 0, 2), fit = TRUE)
+```
+
+## 6.3 What the reform does to the indices
+
+```{r dia-index, comment = ""}
+# `indices()` in section 3 is pinned to the fifteen-district, 180-cell status quo. A diaspora
+# district adds a sixteenth unit, so the same arithmetic is written here over an arbitrary
+# unit x faith table - and checked against `indices()` on the status quo before it is used on
+# anything else.
+ix3 <- function(d) {
+  T <- sum(d$seats); V <- sum(d$v)
+  lev <- function(by) {
+    g   <- summarise(d, s = sum(seats), v = sum(v), .by = all_of(by))
+    dev <- 100 * g$s / T - 100 * g$v / V
+    c(mal = sum(abs(dev)) / 2, gal = sqrt(sum(dev^2) / 2))
+  }
+  g <- lev("district"); f <- lev("faith"); c2 <- lev(c("district", "faith"))
+  c(mal_geo = g[["mal"]], mal_conf = f[["mal"]], mal_cell = c2[["mal"]],
+    gal_cell = c2[["gal"]], gal_geo = g[["gal"]], gal_conf = f[["gal"]])
+}
+stopifnot(all.equal(ix3(mutate(dc, v = voters)), base_ix, tolerance = 1e-9))
+
+# A 16 x 12 unit x faith table per scenario. The domestic side is scored on residents; the
+# diaspora district holds the registrants those districts gave up, so every scenario is scored
+# on the same 3,967,507 people, partitioned differently.
+scen_tab <- function(dom_seats, dia_col) bind_rows(
+  transmute(dom, district, dist_name, faith, seats = dom_seats, v = residents),
+  transmute(dia_f, district = DIA, dist_name = "Diaspora", faith,
+            seats = .data[[dia_col]], v = v))
+
+# THE BASELINE IS THE STATUS QUO, and it lives on the same sixteen-unit grid as every scenario.
+# That is not a trick: under the suspension the electorate abroad votes in its district of civil
+# registration, so those voters ARE the domestic rows' registrants and the diaspora unit holds
+# nobody and nothing. Writing it out that way - domestic cells on `voters` (the full roll,
+# emigrants included), diaspora cells at zero voters and zero seats - gives a 192-cell table that
+# is the status quo exactly. A cell with no voters and no seats contributes no deviation, which is
+# why scoring it reproduces `base_ix` from section 3 to the last digit; that is asserted below
+# rather than assumed. Every comparison in this section is therefore like-for-like: the same 192
+# cells and the same 3,967,507 registrants on both sides, with only seats and their partition
+# moving.
+tab_sq <- bind_rows(
+  transmute(dom,   district, dist_name, faith, seats = as.integer(seats), v = voters),
+  transmute(dia_f, district = DIA, dist_name = "Diaspora", faith, seats = 0L, v = 0))
+
+tab_S <- scen_tab(as.integer(dom$seats), "s_S")     # S134: added on, domestic untouched
+tab_F <- scen_tab(dom$s_F,               "s_S")     # S128: folded in, same confessions
+tab_P <- scen_tab(dom$s_P,               "s_P")     # P7: seven, proportional
+stopifnot(sum(tab_sq$seats) == 128L, sum(tab_S$seats) == 134L, sum(tab_P$seats) == 128L,
+          sum(tab_F$seats) == 128L,
+          nrow(tab_sq) == 16 * 12, nrow(tab_S) == 16 * 12,
+          all.equal(sum(tab_sq$v), sum(dc$voters)),
+          all.equal(sum(tab_S$v), sum(dc$voters)), all.equal(sum(tab_P$v), sum(dc$voters)),
+          # the 192-cell status quo IS the fifteen-district status quo, scored identically
+          all.equal(ix3(tab_sq), base_ix, tolerance = 1e-9))
+
+# The sixteen-unit voter vector the scenarios live on (diaspora holding its own registrants), for
+# the granularity floors below. Identical across scenarios, so it is taken once.
+v16 <- tab_P$v
+stopifnot(identical(v16, tab_S$v), identical(v16, tab_F$v))
+
+# A BENCHMARK row: section 5.5's best 128-seat reallocation inside the fifteen districts, with no
+# diaspora district at all. It answers the obvious question about every row above - how much of the
+# available improvement does a diaspora reform actually capture? - and it belongs on this grid for
+# the same reason the status quo does: written with the diaspora unit empty it scores exactly as it
+# does over 180 cells, which is asserted below.
+#
+# `opt$cell` is indexed over `cv` (the cells that have voters), so it is scattered back onto the
+# 180-cell order. `dom` shares that order with `key180`, both being arrange(district, faith).
+S_ba <- rep(0L, length(key180))
+S_ba[match(cv$key, key180)] <- as.integer(opt$cell)
+stopifnot(identical(paste(dom$district, dom$faith, sep = "|"), key180))
+tab_ba <- bind_rows(
+  transmute(dom, district, dist_name, faith, seats = S_ba, v = voters),
+  transmute(dia_f, district = DIA, dist_name = "Diaspora", faith, seats = 0L, v = 0))
+stopifnot(sum(tab_ba$seats) == 128L,
+          # the 192-cell scorer must reproduce section 5.5's own figures exactly
+          all.equal(ix3(tab_ba), ix_cv(opt$cell), tolerance = 1e-9))
+
+# --- the granularity floor -----------------------------------------------------
+# A 134-seat chamber is not scored on a different footing: both indices compare seat SHARES with
+# voter SHARES and both sides are normalised to 100, so the changed member-to-voter ratio cancels
+# out. What DOES change is the GRAIN - one seat is 1/134 of the chamber rather than 1/128 - and
+# finer units track any target more closely. `floors` isolates exactly that, per measure: for a
+# chamber of T it allocates T seats over the same sixteen-unit voter vector to minimise that
+# measure, ignoring every confessional and parity constraint. SLH is an L1 index so its optimum
+# is largest remainder; Gallagher is L2 so its optimum is the greedy L2 allocation. The gap
+# between the T=128 and T=134 floors is the mechanical advantage the bigger chamber enjoys, and
+# it is the yardstick for deciding which of S134's margins mean anything.
+floors <- function(T) {
+  v  <- v16
+  di <- match(tab_P$district, unique(tab_P$district))     # 16 units
+  fi <- match(tab_P$faith,    unique(tab_P$faith))        # 12 confessions
+  ag <- function(x, m, k) as.vector(tapply(x, factor(m, levels = seq_len(k)), sum, default = 0))
+  lev <- function(vv) {
+    sh <- 100 * vv / sum(vv)
+    c(mal = sum(abs(100 * hamilton(vv, T) / T - sh)) / 2,
+      gal = sqrt(sum((100 * greedy_free(T * vv / sum(vv), T, "L2") / T - sh)^2) / 2))
+  }
+  g <- lev(ag(v, di, 16)); f <- lev(ag(v, fi, 12)); c2 <- lev(v)
+  c(mal_geo = g[["mal"]], mal_conf = f[["mal"]], mal_cell = c2[["mal"]],
+    gal_geo = g[["gal"]], gal_conf = f[["gal"]], gal_cell = c2[["gal"]])
+}
+IXM     <- c("mal_geo", "mal_conf", "mal_cell", "gal_geo", "gal_conf", "gal_cell")
+gran    <- floors(128L) - floors(134L)
+stopifnot(all(gran > 0))              # the larger chamber has the lower floor on every measure
+
+dia_scores <- bind_rows(
+  tibble(scenario = "Status Quo (No Diaspora District)", seats = 128L, dia = 0L,
+         as_tibble_row(ix3(tab_sq))),
+  tibble(scenario = "Article 112 Diaspora District (+6)", seats = 134L, dia = 6L,
+         as_tibble_row(ix3(tab_S))),
+  tibble(scenario = "Article 112 Diaspora District (Folded in)", seats = 128L, dia = 6L,
+         as_tibble_row(ix3(tab_F))),
+  tibble(scenario = "Proportional Diaspora District", seats = 128L, dia = 7L,
+         as_tibble_row(ix3(tab_P))),
+  tibble(scenario = "Best Alternative (No Diaspora District)", seats = 128L, dia = 0L,
+         as_tibble_row(ix3(tab_ba)))) |>
+  select(scenario, seats, dia, gal_geo, gal_conf, gal_cell, mal_geo, mal_conf, mal_cell)
+
+# The findings this section rests on, pinned so a change to the data or the rules breaks here
+# rather than silently rewriting the prose.
+SQ_ <- 1L; S134_ <- 2L; S128_ <- 3L; P7_ <- 4L; BA_ <- 5L   # named so they stay readable
+stopifnot(
+  nrow(dia_scores) == 5L,
+  # S134 - the ADD-ON phase - is worse than the status quo on all six measures
+  all(dia_scores[S134_, IXM] > dia_scores[SQ_, IXM]),
+  # On four of six it loses by MORE than the granularity advantage it enjoys, so those margins
+  # are real; on geographic and cell Gallagher its deficit is INSIDE the gap, so those two are
+  # ties and the argument must not be rested on them. Pinned exactly that way.
+  sum(unlist(dia_scores[S134_, IXM] - dia_scores[SQ_, IXM]) > gran[IXM]) == 4L,
+  all((unlist(dia_scores[S134_, IXM] - dia_scores[SQ_, IXM]) > gran[IXM])[
+        c("mal_geo", "mal_conf", "mal_cell", "gal_conf")]),
+  # the FOLD-IN beats the status quo on all three Gallagher levels
+  all(dia_scores[S128_, c("gal_geo", "gal_conf", "gal_cell")] <=
+      dia_scores[SQ_, c("gal_geo", "gal_conf", "gal_cell")]),
+  # and leaves the confessional indices EXACTLY unchanged - neutral by construction
+  all.equal(dia_scores$mal_conf[S128_], dia_scores$mal_conf[SQ_]),
+  all.equal(dia_scores$gal_conf[S128_], dia_scores$gal_conf[SQ_]),
+  # P7 is better than the status quo on every one of the six, and is the best of the DIASPORA
+  # scenarios on cell - but NOT the best row in the table, because the benchmark beats it.
+  all(dia_scores[P7_, IXM] < dia_scores[SQ_, IXM]),
+  which.min(dia_scores$gal_cell[c(SQ_, S134_, S128_, P7_)]) == P7_,
+  which.min(dia_scores$gal_cell) == BA_,
+  # the benchmark moves 27 seats where the diaspora scenarios move 6 or 7
+  sum(pmax(tab_ba$seats - tab_sq$seats, 0)) == 27L)
+
+# Presentation follows Table \ref{tab:optima}: Gallagher at all three levels, then
+# Loosemore-Hanby at cell level only, as a percentage and as a count of seats. The seat count uses
+# each row's OWN chamber size, so the 134-seat row converts on 1.34 and the rest on 1.28 - the same
+# rule as the master table. `dia_scores` keeps all six measures because the assertions above and
+# Table \ref{tab:dia-grain} read them by name; only the display is narrowed.
+dia_out <- dia_scores |>
+  transmute(scenario, seats, dia, gal_geo, gal_conf, gal_cell,
+            lh_pct = mal_cell, lh_seats = mal_cell * seats / 100)
+stopifnot(abs(dia_out$lh_seats[S134_] - dia_out$lh_pct[S134_] * 1.34) < 1e-9,
+          abs(dia_out$lh_seats[SQ_]   - dia_out$lh_pct[SQ_]   * 1.28) < 1e-9)
+
+ltab(dia_out,
+     caption = "Diaspora Voting: Status Quo vs. Diaspora District Alternatives",
+     label = "dia-index",
+     col.names = c("Scenario", "Seats", "Diaspora seats",
+                   "District", "Confessional", "District x Confessional",
+                   "%", "Seats"),
+     header = c(" " = 3, "Gallagher" = 3, "Loosemore-Hanby" = 2),
+     align = "lrrrrrrr", digits = c(0, 0, 0, 3, 3, 3, 2, 1), fit = TRUE)
+```
+
+### On comparing a 134-seat chamber with a 128-seat one
+
+```{r dia-grain, comment = ""}
+grain <- tibble(
+  measure = c("SLH, geographic", "SLH, confessional", "SLH, cell",
+              "Gallagher, geographic", "Gallagher, confessional", "Gallagher, cell"),
+  floor128 = floors(128L)[IXM], floor134 = floors(134L)[IXM],
+  advantage = gran[IXM],
+  current = unlist(dia_scores[SQ_, IXM]), s134 = unlist(dia_scores[S134_, IXM])) |>
+  mutate(margin = s134 - current,
+         verdict = if_else(margin > advantage, "real", "inside the grain"))
+stopifnot(sum(grain$verdict == "real") == 4L, all(grain$advantage > 0))
+
+ltab(grain |> select(measure, floor128, floor134, advantage, margin, verdict),
+     caption = paste0("Is S134's deficit larger than the advantage a bigger chamber gets for ",
+       "free? \\emph{Floor} is the best value of that measure attainable by any allocation of ",
+       "128 or 134 seats over the same sixteen-unit electorate, with no confessional or parity ",
+       "constraint - largest remainder for SLH, greedy least-squares for Gallagher. ",
+       "\\emph{Advantage} is the difference, the purely mechanical edge finer seats confer. ",
+       "\\emph{Margin} is how much worse S134 is than the current table. On four measures the ",
+       "margin is several times the advantage, so the deficit is real and understated; on ",
+       "geographic and cell Gallagher it is smaller than the advantage, so those two should be ",
+       "read as ties and no weight put on them."),
+     label = "dia-grain",
+     col.names = c("Measure", "Floor, 128", "Floor, 134", "Advantage to 134",
+                   "S134 margin", "Verdict"),
+     align = "lrrrrl", digits = c(0, 3, 3, 3, 3, 0))
+```
+
+## 6.4 Where the seats come from and go
+
+```{r dia-grid, comment = ""}
+# Seat change per cell against the STATUS QUO, plus the Gallagher slice of any group of cells
+# before and after. Both sides share the same sixteen-unit grid, so the cells line up one to one;
+# what differs is where the voters sit (the diaspora unit is empty in the status quo and holds its
+# registrants afterwards) and the seat totals (128 under S128 and P7, 134 under S134). `v` is the
+# baseline's voter column and `v1` the scenario's, so each side's deviation uses its own.
+ORD <- c(unname(DISTRICT), DIA)                       # diaspora last, not alphabetically
+DABBR_D <- c(DABBR, setNames("Dias.", DIA))           # local: DABBR itself is shared
+
+dia_cells <- function(after) {
+  stopifnot(identical(tab_sq$district, after$district), identical(tab_sq$faith, after$faith))
+  V <- sum(tab_sq$v)
+  tibble(district = factor(tab_sq$district, levels = ORD), faith = tab_sq$faith,
+         v = tab_sq$v, v1 = after$v,
+         s0 = tab_sq$seats, s1 = after$seats, d = after$seats - tab_sq$seats,
+         dev0 = 100 * s0 / sum(tab_sq$seats) - 100 * v / V,
+         dev1 = 100 * s1 / sum(after$seats) - 100 * v1 / V)
+}
+slice_delta <- function(g) sqrt(sum(g$dev1^2) / 2) - sqrt(sum(g$dev0^2) / 2)
+d_gal <- function(cl, by) cl |> group_by(across(all_of(by))) |>
+  group_modify(\(g, k) tibble(dgal = slice_delta(g))) |> ungroup() |> arrange(.data[[by]])
+
+# The body holds whole seats and two margins hold Gallagher changes; `digits` applies down a
+# whole column, so the table is assembled as text with each part formatted its own way.
+as_seats <- function(x) if_else(is.na(x), "", formatC(x, format = "d"))
+as_gal   <- function(x) formatC(x, format = "f", digits = 3)
+
+# `net_zero` says whether the chamber is the same size on both sides. Under P it is (seven
+# seats leave the domestic table and seven arrive in the diaspora district) so the net-seats
+# corner would necessarily read nought and is left blank, exactly as in section 5.6. Under S
+# the chamber GROWS, so that corner carries the real total and is printed.
+dia_grid_tab <- function(cl, net_zero) {
+  f_seats <- cl |> summarise(net = sum(d), .by = faith)    |> arrange(faith)
+  d_seats <- cl |> summarise(net = sum(d), .by = district) |> arrange(district)
+  f_gal   <- d_gal(cl, "faith"); d_gal_ <- d_gal(cl, "district")
+  stopifnot(sum(f_seats$net) == sum(d_seats$net))
+
+  g <- cl |>
+    mutate(cell = if_else(s0 == 0 & s1 == 0, NA_real_, as.numeric(d))) |>
+    select(district, faith, cell) |> arrange(district) |>
+    pivot_wider(names_from = district, values_from = cell) |> arrange(faith) |>
+    mutate(across(-faith, as_seats),
+           Seats = as_seats(f_seats$net), Gallagher = as_gal(f_gal$dgal))
+
+  mk_row <- function(label, vals, seats = "", gal = "")
+    as_tibble(c(list(faith = label), as.list(vals), list(Seats = seats, Gallagher = gal)))
+  g <- bind_rows(g,
+    mk_row("Seats moved", setNames(as_seats(d_seats$net), as.character(d_seats$district)),
+           seats = if (net_zero) "" else as_seats(sum(d_seats$net))),
+    mk_row("Change in Gallagher",
+           setNames(as_gal(d_gal_$dgal), as.character(d_gal_$district)),
+           gal = as_gal(slice_delta(cl))))
+
+  # Bold the cells that change, and both margin columns. The two foot rows are bolded by
+  # bold_row, so they are FALSE here and \textbf never nests.
+  m <- cl |> mutate(chg = d != 0) |> select(district, faith, chg) |> arrange(district) |>
+    pivot_wider(names_from = district, values_from = chg) |> arrange(faith)
+  m <- cbind(as.matrix(m[, -1]), Seats = TRUE, Gallagher = TRUE)
+  m[is.na(m)] <- FALSE
+  list(tab = g, mask = rbind(m, rep(FALSE, ncol(m)), rep(FALSE, ncol(m))))
+}
+
+cl_P <- dia_cells(tab_P)
+gp   <- dia_grid_tab(cl_P, net_zero = TRUE)
+
+# The grid must reproduce the index table it sits next to, and the seat body must reproduce
+# the carve-out table above it.
+stopifnot(sum(abs(cl_P$d)) / 2 == 7, sum(cl_P$d) == 0,
+          sum(cl_P$d != 0) == 12, sum(cl_P$d < 0) == 6, sum(cl_P$d > 0) == 6,
+          abs(slice_delta(cl_P) -
+                (ix3(tab_P)[["gal_cell"]] - ix3(tab_sq)[["gal_cell"]])) < 1e-9)
+
+ltab(gp$tab,
+     caption = "Seats gained and lost under Proportional Diaspora District",
+     note = "Districts are abbreviated as in Table \\ref{tab:voters-per-seat}.",
+     label = "dia-grid",
+     col.names = c("Confession", DABBR_D[names(gp$tab)[2:17]], "Seats", "Gallagher"),
+     align = paste0("l", strrep("r", 18)), fit = TRUE,
+     bold_cells = gp$mask, bold_row = c(nrow(gp$tab) - 1L, nrow(gp$tab)))
+```
+
+```{r dia-grid-a112, comment = ""}
+# The same machinery, for the two Article 112 scenarios. `net_zero` says whether the chamber is the
+# same size on both sides: FALSE for the add-on, which grows to 134, so its net-seats corner carries
+# the real total of +6 instead of being left blank.
+cl_S <- dia_cells(tab_S)
+cl_F <- dia_cells(tab_F)
+gs   <- dia_grid_tab(cl_S, net_zero = FALSE)
+gf   <- dia_grid_tab(cl_F, net_zero = TRUE)
+
+stopifnot(all(cl_S$d[cl_S$district != DIA] == 0),   # the add-on touches no domestic seat
+          sum(cl_S$d) == 6L,
+          sum(cl_F$d) == 0L, sum(pmax(cl_F$d, 0)) == 6L,
+          # each grid's corner is its own line in Table \ref{tab:dia-index}
+          abs(slice_delta(cl_S) -
+                (ix3(tab_S)[["gal_cell"]] - ix3(tab_sq)[["gal_cell"]])) < 1e-9,
+          abs(slice_delta(cl_F) -
+                (ix3(tab_F)[["gal_cell"]] - ix3(tab_sq)[["gal_cell"]])) < 1e-9)
+
+ltab(gs$tab,
+     caption = "Seats gained and lost under Article 112 Diaspora District (+6)",
+     label = "dia-grid-a112",
+     col.names = c("Confession", DABBR_D[names(gs$tab)[2:17]], "Seats", "Gallagher"),
+     align = paste0("l", strrep("r", 18)), fit = TRUE,
+     bold_cells = gs$mask, bold_row = c(nrow(gs$tab) - 1L, nrow(gs$tab)))
+
+ltab(gf$tab,
+     caption = "Seats gained and lost under Article 112 Diaspora District (Folded in)",
+     note = "Districts are abbreviated as in Table \\ref{tab:voters-per-seat}.",
+     label = "dia-grid-a112f",
+     col.names = c("Confession", DABBR_D[names(gf$tab)[2:17]], "Seats", "Gallagher"),
+     align = paste0("l", strrep("r", 18)), fit = TRUE,
+     bold_cells = gf$mask, bold_row = c(nrow(gf$tab) - 1L, nrow(gf$tab)))
+```
+
+```{r dia-grid-S, comment = ""}
+# The three-scenario comparison. `cl_S` and `cl_F` are built above.
+# What is worth seeing side by side is the NET effect per confession,
+# which is what decides the confessional index.
+net_by_faith <- function(cl, nm) cl |>
+  summarise(!!nm := as.integer(sum(d)), .by = faith)
+gal_by_faith <- function(cl, nm) d_gal(cl, "faith") |> rename(!!nm := dgal)
+
+S_out <- reduce(list(
+  net_by_faith(cl_S, "n_S134"), net_by_faith(cl_F, "n_S128"),
+  net_by_faith(cl_P, "n_P7"),
+  gal_by_faith(cl_S, "g_S134"), gal_by_faith(cl_F, "g_S128"),
+  gal_by_faith(cl_P, "g_P7")),
+  \(a, b) left_join(a, b, by = "faith")) |> arrange(faith)
+
+# S128 returns a seat from each named sect and hands the same sect one abroad, so every net is
+# zero - the neutrality result of section 6.3, visible here as a column of noughts.
+stopifnot(all(S_out$n_S128 == 0L))
+
+S_tab <- S_out |>
+  transmute(faith,
+            n_S134 = as_seats(n_S134), n_S128 = as_seats(n_S128), n_P7 = as_seats(n_P7),
+            g_S134 = as_gal(g_S134),   g_S128 = as_gal(g_S128),   g_P7 = as_gal(g_P7))
+S_tab <- bind_rows(S_tab, tibble(
+  faith  = "Total",
+  n_S134 = as_seats(sum(cl_S$d)), n_S128 = as_seats(sum(cl_F$d)),
+  n_P7   = as_seats(sum(cl_P$d)),
+  g_S134 = as_gal(slice_delta(cl_S)), g_S128 = as_gal(slice_delta(cl_F)),
+  g_P7   = as_gal(slice_delta(cl_P))))
+
+ltab(S_tab,
+     caption = paste0("Net seats and Gallagher slices by confession, all three scenarios, each ",
+       "measured against the status quo and each row aggregating that confession's cells across ",
+       "all sixteen districts. The Gallagher columns are that confession's slice of the CELL ",
+       "index, ",
+       "as in Table \\ref{tab:opt-grid}, not the confessional index. The S128 net column is ",
+       "\\emph{all noughts}, which is the neutrality result of section 6.3 made visible: the ",
+       "statute returns a seat from each named sect and awards the same sect one abroad, so no ",
+       "confession's national total moves. The foot row gives seats added or moved - S134 grows ",
+       "the chamber, so it totals six, while S128 and P7 are swaps and total nought - and the ",
+       "change in the overall cell index. Gallagher slices combine in quadrature, so the foot ",
+       "figures are not column sums. Negative Gallagher is an improvement."),
+     label = "dia-grid-S",
+     col.names = c("Confession", "S134", "S128", "P7", "S134", "S128", "P7"),
+     align = "lrrrrrr", fit = TRUE, bold_row = nrow(S_tab))
+```
+
+## 6.5 All scenarios side by side
+
+```{r optima-all, comment = ""}
+# The diaspora scenarios in the same columns as section 5.5's seat tables. `moves` is the number of
+# seats that change hands - the sum of the POSITIVE deltas against the status quo, which equals the
+# usual sum(abs)/2 whenever the chamber size is held fixed, and correctly counts the six added seats
+# under the Article 112 add-on row, where no domestic seat moves at all.
+#
+# `mal_seats` converts the Loosemore-Hanby percentage into a count of seats, so it must use each
+# row's OWN chamber size: 134 for the add-on row, 128 everywhere else.
+dia_row <- function(tab, label) {
+  z <- ix3(tab); d <- tab$seats - tab_sq$seats
+  tibble(table = label,
+         moves = sum(pmax(d, 0)),
+         districts = n_distinct(tab$district[d != 0]),
+         gal_geo = z[["gal_geo"]], gal_conf = z[["gal_conf"]], gal_cell = z[["gal_cell"]],
+         mal_cell = z[["mal_cell"]], mal_seats = z[["mal_cell"]] * sum(tab$seats) / 100)
+}
+
+# The two scorers must agree on the status quo, or the rows are not on a common footing. `ix_cv`
+# works over 15 districts and 180 cells, `ix3` over 16 and 192 with twelve of them empty.
+stopifnot(all.equal(unname(ix3(tab_sq)[c("gal_geo", "gal_conf", "gal_cell", "mal_cell")]),
+                    unname(z0[c("gal_geo", "gal_conf", "gal_cell", "mal_cell")]),
+                    tolerance = 1e-9))
+
+optab_all <- bind_rows(
+  optab,
+  dia_row(tab_S, "Article 112 Diaspora District (+6 seats)"),
+  dia_row(tab_F, "Article 112 Diaspora District (Folded in)"),
+  dia_row(tab_P, "Proportional Diaspora District"))
+
+stopifnot(nrow(optab_all) == 8L,
+          identical(optab_all$table[2], "Proportional Ideal (without Taif Agreement)"),
+          # the add-on row adds six seats and moves none; the fold-in row moves six
+          optab_all$moves[6] == 6L, optab_all$districts[6] == 1L,
+          optab_all$moves[7] == 6L, optab_all$moves[8] == 7L,
+          # and its seat count is taken on 134, not 128
+          abs(optab_all$mal_seats[6] - optab_all$mal_cell[6] * 1.34) < 1e-9,
+          abs(optab_all$mal_seats[1] - optab_all$mal_cell[1] * 1.28) < 1e-9)
+
+ltab(optab_all,
+     caption = "Malapportionment of Status Quo vs. Proposed Alternative Allocations",
+     label = "optima",
+     col.names = c("", "Seat moves", "Districts touched",
+                   "District", "Confessional", "District x Confessional",
+                   "%", "Seats"),
+     header = c(" " = 3, "Gallagher Index" = 3, "Loosemore-Hanby Index" = 2),
+     digits = c(0, 0, 0, 3, 3, 3, 2, 1), fit = TRUE)
+```
+
+# 7. Appendix
+
+## 7.1 Seats gained and lost without the 64--64 rule
+
+```{r opt-grid-free, comment = ""}
+# The same grid section 5.6 builds for the parity-respecting optimum, for the unconstrained one.
+# Written as a function rather than inline so the two are demonstrably the same computation; the
+# 5.6 chunk is left exactly as it is, since it is already correct and in the paper.
+change_grid <- function(new_seats) {
+  g <- cv |> mutate(new = new_seats, d = new - s0,
+                    dev0 = 100 * s0  / sum(s0)  - 100 * v / sum(cv$v),
+                    dev1 = 100 * new / sum(new) - 100 * v / sum(cv$v))
+  sd_    <- function(x) sqrt(sum(x$dev1^2) / 2) - sqrt(sum(x$dev0^2) / 2)
+  by_gal <- function(by) g |> group_by(across(all_of(by))) |>
+    group_modify(\(x, k) tibble(dgal = sd_(x))) |> ungroup() |> arrange(.data[[by]])
+
+  f_seats <- g |> summarise(net = sum(d), .by = vfaith)   |> arrange(vfaith)
+  d_seats <- g |> summarise(net = sum(d), .by = district) |> arrange(district)
+  stopifnot(sum(f_seats$net) == 0, sum(d_seats$net) == 0)          # a swap on both axes
+
+  tab <- g |>
+    mutate(cell = if_else(s0 == 0 & new == 0, NA_real_, as.numeric(d))) |>
+    select(district, vfaith, cell) |> arrange(district) |>
+    pivot_wider(names_from = district, values_from = cell) |> arrange(vfaith) |>
+    mutate(across(-vfaith, as_seats),
+           Seats = as_seats(f_seats$net), Gallagher = as_gal(by_gal("vfaith")$dgal))
+
+  mk <- function(label, vals, gal = "")
+    as_tibble(c(list(vfaith = label), as.list(vals), list(Seats = "", Gallagher = gal)))
+  tab <- bind_rows(tab,
+    mk("Seats moved", setNames(as_seats(d_seats$net), d_seats$district)),
+    mk("Change in Gallagher", setNames(as_gal(by_gal("district")$dgal), d_seats$district),
+       gal = as_gal(sd_(g))))
+
+  m <- g |> mutate(chg = d != 0) |> select(district, vfaith, chg) |> arrange(district) |>
+    pivot_wider(names_from = district, values_from = chg) |> arrange(vfaith)
+  m <- cbind(as.matrix(m[, -1]), Seats = TRUE, Gallagher = TRUE)
+  m[is.na(m)] <- FALSE
+  list(tab = tab, mask = rbind(m, rep(FALSE, ncol(m)), rep(FALSE, ncol(m))),
+       moves = sum(abs(g$d)) / 2, cells = sum(g$d != 0), corner = sd_(g))
+}
+
+gfree <- change_grid(free_cell)
+
+# The grid must reproduce section 5.5's own figures for this table, and the parity split it implies.
+stopifnot(gfree$moves == 27, gfree$cells == 39,
+          abs(gfree$corner - (ix_cv(free_cell)[["gal_cell"]] - z0[["gal_cell"]])) < 1e-9,
+          sum(free_cell[cv$bloc == "Christian"]) == 41L,
+          sum(free_cell[cv$bloc == "Muslim"])    == 87L)
+
+ltab(gfree$tab,
+     caption = paste0("Seats gained and lost from status quo to proportional ideal with 128 seats ",
+                      "(no Taif agreement restriction). Districts are abbreviated as in Table ",
+                      "\\ref{tab:voters-per-seat}."),
+     label = "opt-grid-free",
+     col.names = c("Confession", DABBR[names(gfree$tab)[2:16]], "Seats", "Gallagher"),
+     align = paste0("l", strrep("r", 17)), fit = TRUE,
+     bold_cells = gfree$mask, bold_row = c(nrow(gfree$tab) - 1L, nrow(gfree$tab)))
+```
