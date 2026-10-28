@@ -9,8 +9,6 @@ Code and data for
 
 ## Data sources
 
-## Data sources
-
 - **Seat allocation (`seats.csv`)**: statutory allocation of the 128 seats by qada and confession under Law 44/2017, transcribed from the Ministry of Interior and Municipalities' official election publications (2018, 2022). 
 - **2022 voter register (`data/population - registered voters/voters_by_district_sect_long.csv`)**: Ministry of Interior and Municipalities, final 2022 voter register (3,967,507 registrants), aggregated to district × sect. Extracted from the `Registered_Voters_by_District.twbx` workbook published by L'Orient Today / L'Orient-Le Jour in its "Mapping Lebanon" series. 
 - **2022 diaspora registrants (`data/population - registered voters/diaspora_voters_by_country_district_sect.csv`)**: Registrants abroad by country, district and sect, also from the Ministry of Interior and Municipalities by way of L'Orient Today / L'Orient-Le Jour in its "Mapping Lebanon" series. 
