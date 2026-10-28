@@ -3,7 +3,7 @@
 Code and data for
 
 > Howard, P. and St Sauver, E. "Lebanon: Proportional Representation Under Consociationalism." Forthcoming submission to a special issue of *Public Choice* on "The Dark Side of Proportional Representation."
->
+
 > Abstract:
 > What are the trade-offs of representation associated with guaranteeing political communities fixed shares of a legislature? Constitutions in divided societies routinely allocate a fixed share of the legislature to ethnic, religious, or territorial groups in service of maintaining peaceful power-sharing. We measure how far from proportional representation are apportioned seats in Lebanon, whose 128 parliamentary seats have been divided among fifteen districts and eleven religious confessions by a sequence of political settlements. As the most recent census was conducted in 1932, we use data from the national voter register, the only cur- rent official count of citizens on both dimensions to compute the distribution of the electoral seats under totals proportional to the registered population. About a quarter of the chamber sits with a district or a confession other than the one that an ideal proportional allocation assigns, and reallocating all 128 seats reconciles about half of that difference. The other half is held in place by the equal division of the chamber between Christian and Muslim confessions stipulated by the Taif Agreement. We then test two reforms now under debate, imposing a single national district and variants of a recent provision that allocates seats for citizens from the Lebanese diaspora voting abroad, finding still that the existing 15-district system without the separate diaspora district fares best once seats are reallocated more closely to the proportional ideal.
 
