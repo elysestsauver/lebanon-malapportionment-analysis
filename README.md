@@ -14,7 +14,7 @@ Questions: estsauve[AT]uci.edu, peytoh1[AT]uci.edu
 ## Sources
 
 - **Registered voters.** Lebanon's final 2022 voter lists from Lebanon's Ministry of Interior and Municipalities, as compiled by L'Orient Today in its public Tableau workbook *Registered Voters by District*. See L'Orient Today, "Mapping Lebanon: Data and Statistics": https://today.lorientlejour.com/article/1297803/data-and-statistics.html
-- **Seat allocation.** The statutory allocation of the 128 seats by qada and confession under Law 44/2017, transcribed from the Ministry of Interior and Municipalities's official results (`seats.csv`).
+- **Seat allocation.** The statutory allocation of the 128 seats by qada and confession under Law 44/2017, transcribed from the Ministry of Interior and Municipalities's official results available at the URL: https://elections.gov.lb/menu-details/4181/4886/5981 (`seats.csv`).
 
 ## Files
 
