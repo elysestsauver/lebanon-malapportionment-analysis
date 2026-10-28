@@ -13,13 +13,13 @@ Elyse St Sauver and Peyton Howard, Department of Economics, University of Califo
 
 ## Source
 
-Lebanon's final 2022 voter lists from the Ministry of Interior, as compiled by L'Orient Today in its public Tableau workbook *Registered Voters by District*. See L'Orient Today, "Mapping Lebanon: Data and statistics": https://today.lorientlejour.com/article/1297803/data-and-statistics.html
+Lebanon's final 2022 voter lists from the Ministry of Interior, as compiled by L'Orient Today in its public Tableau workbook *Registered Voters by District*. See L'Orient Today, "Mapping Lebanon: Data and Statistics": https://today.lorientlejour.com/article/1297803/data-and-statistics.html
 
 ## Files
 
 | File | What it is |
 |---|---|
-| `Registered Voters by District.twbx` | Raw data: L'Orient Today's Tableau workbook |
+| `Registered Voters by District.twbx` | Not available due to size limits. Raw data: L'Orient Today's Tableau workbook |
 | `extract_voters_from_twbx.py` | Step 1: copies the voter table out of the workbook |
 | `District RVs Extracted from Tableau.csv` | Output of step 1: one row per registered voter (3,967,507 rows) |
 | `District Pop.csv` | Tableau's district totals; step 2 checks the voter counts against them |
@@ -28,18 +28,22 @@ Lebanon's final 2022 voter lists from the Ministry of Interior, as compiled by L
 | `cleaned/voters_by_district_sect_long.csv` | Final data: one row per minor district and sect (299 rows) |
 | `cleaned/diaspora_voters_by_country_district_sect.csv` | Final data: voters registered abroad, one row per country, minor district, and sect (6,133 rows) |
 | `cleaned/registered_voter_counts_2022.csv` | Voter counts by district, sect, sex, and voting location |
+| `malapportionment.Rmd` | The code for the tables and malapportionment computations
 
 ## How to reproduce
 
-From this folder:
+The workbook itself was too large to upload to this repository, but it's accessible from the "Mapping Lebanon: Data and Statistics" Tableau workbook produced by L'Orient Today: https://today.lorientlejour.com/article/1297803/data-and-statistics.html. 
+
+Use the downloaded .twbx along with the R script from this folder:
 
     python3 -m pip install tableauhyperapi==0.0.26479
     python3 extract_voters_from_twbx.py "Registered Voters by District.twbx"
     Rscript clean_registered_voters_2022.R
 
-The first two commands recreate `District RVs Extracted from Tableau.csv`; skip them to start from the copy included here. The last needs R 4.2 or later with the readr and dplyr packages.
+The first two commands recreate `District RVs Extracted from Tableau.csv`. The last needs R 4.2 or later with the readr and dplyr packages.
 
 Do not use Tableau's own CSV export of the voter table instead: it drops 313,375 voters.
+
 
 ## Variables
 
